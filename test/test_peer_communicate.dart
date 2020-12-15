@@ -69,13 +69,15 @@ void main() {
         });
         peer.onRequest((p, index, begin, length) {
           callMap['request'] = true;
-          assert(index == 1);
           assert(begin == 0);
           assert(length == DEFAULT_REQUEST_LENGTH);
+          if (index == 1) {
+            peer.sendRejectRequest(index, begin, DEFAULT_REQUEST_LENGTH);
+          }
         });
         peer.onCancel((peer, index, begin, length) {
           callMap['cancel'] = true;
-          assert(index == 1);
+          assert(index == 2);
           assert(begin == 0);
           assert(length == DEFAULT_REQUEST_LENGTH);
         });
@@ -101,12 +103,7 @@ void main() {
           callMap['suggest_piece'] = true;
           peer.sendRequest(index, 0);
         });
-        peer.onRejectRequest((peer, index, begin, length) {
-          assert(index == 1);
-          assert(begin == 0);
-          assert(length == DEFAULT_REQUEST_LENGTH);
-          callMap['reject_request'] = true;
-        });
+
         peer.onAllowFast((peer, index) {
           assert(index == 4);
           callMap['allow_fast'] = true;
@@ -120,8 +117,13 @@ void main() {
           var id = String.fromCharCodes(block.getRange(2, 22));
           assert(id == peer.remotePeerId);
           if (index == 4) {
-            await peer.dispose();
+            await peer.dispose('测试完成');
           }
+        });
+        peer.onDispose((peer, [reason]) async {
+          print('come in destroyed : $reason');
+          await serverSocket?.close();
+          serverSocket = null;
         });
         peer.connect();
       });
@@ -135,6 +137,7 @@ void main() {
         callMap['connect2'] = true;
         print('connect');
         peer.sendHandShake();
+        // peer.dispose();
       });
       peer.onHandShake((peer, remotePeerId, data) {
         callMap['handshake2'] = true;
@@ -146,9 +149,8 @@ void main() {
       peer.onChokeChange((peer, choke) {
         if (!choke) {
           peer.sendRequest(1, 0);
-          peer.sendRejectRequest(1, 0, DEFAULT_REQUEST_LENGTH);
-          peer.sendRequest(1, 0);
-          peer.sendCancel(1, 0, DEFAULT_REQUEST_LENGTH);
+          peer.sendRequest(2, 0);
+          peer.sendCancel(2, 0, DEFAULT_REQUEST_LENGTH);
           peer.sendHave(2);
           peer.sendKeeplive();
           peer.sendPortChange(3321);
@@ -156,6 +158,12 @@ void main() {
           peer.sendHaveNone();
           peer.sendSuggestPiece(3);
         }
+      });
+      peer.onRejectRequest((peer, index, begin, length) {
+        assert(index == 1);
+        assert(begin == 0);
+        assert(length == DEFAULT_REQUEST_LENGTH);
+        callMap['reject_request'] = true;
       });
       peer.onRequest((peer, index, begin, length) {
         var content = Uint8List(DEFAULT_REQUEST_LENGTH);
@@ -172,8 +180,9 @@ void main() {
         peer.sendAllowFast(4);
       });
       peer.onDispose((peer, [reason]) async {
-        await peer.dispose();
+        print('come out destroyed : $reason');
         await serverSocket?.close();
+        serverSocket = null;
         var callAll = callMap.values
             .fold(true, (previousValue, element) => (previousValue && element));
         assert(callAll);
