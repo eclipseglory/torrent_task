@@ -67,8 +67,10 @@ class PieceManager implements PieceProvider {
   /// 文件系统中，会读取出错误的数据
   void processSubPieceWriteComplete(int pieceIndex, int begin, int length) {
     var piece = _pieces[pieceIndex];
-    piece.subPieceWriteComplete(begin);
-    if (piece.isCompleted) _processCompletePiece(pieceIndex);
+    if (piece != null) {
+      piece.subPieceWriteComplete(begin);
+      if (piece.isCompleted) _processCompletePiece(pieceIndex);
+    }
   }
 
   Piece selectPiece(

@@ -179,9 +179,18 @@ void main() {
       assert(stateFile.downloaded == 0);
       assert(stateFile.uploaded == 0);
 
-      await stateFile.updateBitfield(23, true);
+      var updatePiece = <int>{};
+      for (var i = 0; i < stateFile.bitfield.piecesNum ~/ 2; i++) {
+        var index = randomInt(stateFile.bitfield.piecesNum);
+        updatePiece.add(index);
+        await stateFile.updateBitfield(index, true);
+      }
+      await stateFile.updateBitfield(stateFile.bitfield.piecesNum - 1);
+      updatePiece.add(stateFile.bitfield.piecesNum - 1);
+      var updateList = updatePiece.toList();
+      updateList.sort((a, b) => a - b);
       var list = stateFile.bitfield.completedPieces;
-      assert(list.length == 1 && list[0] == 23);
+      assert(list.length == updateList.length);
 
       await stateFile.updateDownloaded(123456789);
       assert(stateFile.downloaded == 123456789);
@@ -194,13 +203,19 @@ void main() {
       var f = File('$directory/${torrent.infoHash}.bt.state');
       var locker = Completer();
       var data = <int>[];
-      f.openRead(stateFile.bitfield.length).listen((event) {
+      f.openRead().listen((event) {
         data.addAll(event);
       }, onDone: () {
+        var nb = Bitfield.copyFrom(
+            stateFile.bitfield.piecesNum, stateFile.bitfield.buffer);
+        for (var i = 0; i < nb.completedPieces.length; i++) {
+          assert(nb.completedPieces[i] == updateList[i]);
+        }
         var v = ByteData.view(Uint8List.fromList(data).buffer);
-        var re = v.getUint64(0);
+        var offset = stateFile.bitfield.buffer.length;
+        var re = v.getUint64(offset);
         assert(re == stateFile.downloaded);
-        re = v.getUint64(8);
+        re = v.getUint64(offset + 8);
         assert(re == stateFile.uploaded);
         locker.complete();
       }, onError: (e) => locker.complete());
@@ -212,8 +227,10 @@ void main() {
       assert(stateFile.bitfield.length == b);
       assert(stateFile.downloaded == 123456789);
       assert(stateFile.uploaded == 987654321);
-      list = stateFile.bitfield.completedPieces;
-      assert(list.length == 1 && list[0] == 23);
+
+      for (var i = 0; i < stateFile.bitfield.completedPieces.length; i++) {
+        assert(stateFile.bitfield.completedPieces[i] == updateList[i]);
+      }
     });
 
     test('Delete StateFile', () async {

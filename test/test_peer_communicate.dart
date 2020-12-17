@@ -39,7 +39,7 @@ void main() {
       serverSocket = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
       serverPort = serverSocket.port;
       serverSocket.listen((socket) {
-        print('client connected');
+        print('client connected : ${socket.address}:${socket.port}');
         var peer = TCPPeer(
             'id1',
             generatePeerId(),
@@ -187,6 +187,7 @@ void main() {
             .fold(true, (previousValue, element) => (previousValue && element));
         assert(callAll);
       });
+      print('connect to : ${peer.address}');
       peer.connect();
     });
   });

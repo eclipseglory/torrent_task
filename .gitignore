@@ -3,6 +3,7 @@
 .packages
 .vscode
 *.torrent
+*.bt.state
 
 # Omit commiting pubspec.lock for library packages:
 # https://dart.dev/guides/libraries/private-files#pubspeclock

@@ -26,20 +26,19 @@ class Bitfield {
     var b = index.remainder(8); // 这表示该数字的第几位bit
     var orNum = BASE_NUM >> b;
     if (bit) {
-      if (_completedIndex != null) {
-        _completedIndex.add(index);
-        var j = _completedIndex.length - 1;
-        for (; j > 0; j--) {
-          if (_completedIndex[j - 1] > _completedIndex[j]) {
-            var temp = _completedIndex[j];
-            _completedIndex[j] = _completedIndex[j - 1];
-            _completedIndex[j - 1] = temp;
-          } else {
-            if (_completedIndex[j - 1] == _completedIndex[j]) {
-              _completedIndex.removeAt(j);
-            }
-            break;
+      _completedIndex = completedPieces;
+      _completedIndex.add(index);
+      var j = _completedIndex.length - 1;
+      for (; j > 0; j--) {
+        if (_completedIndex[j - 1] > _completedIndex[j]) {
+          var temp = _completedIndex[j];
+          _completedIndex[j] = _completedIndex[j - 1];
+          _completedIndex[j - 1] = temp;
+        } else {
+          if (_completedIndex[j - 1] == _completedIndex[j]) {
+            _completedIndex.removeAt(j);
           }
+          break;
         }
       }
       buffer[i] = buffer[i] | orNum;

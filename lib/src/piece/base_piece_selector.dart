@@ -23,6 +23,7 @@ class BasePieceSelector implements PieceSelector {
         break;
       }
     }
+    if (startIndex == null) return maxList;
     for (var i = startIndex; i < piecesIndexList.length; i++) {
       var p = provider[piecesIndexList[i]];
       if (p == null || !p.haveAvalidateSubPiece() || !p.haveAvalidatePeers()) {

@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:torrent_client/src/peer/bitfield.dart';
+import 'package:torrent_client/src/peer/peer_event_dispatcher.dart';
 
 import '../utils.dart';
 
@@ -31,25 +33,6 @@ const HAND_SHAKE_HEAD = [
   111,
   108
 ];
-
-const PEER_EVENT_CONNECTED = 'connected';
-const PEER_EVENT_REQUEST_TIMEOUT = 'request_timeout';
-const PEER_EVENT_CLOSE = 'close';
-const PEER_EVENT_HANDSHAKE = 'handshake';
-const PEER_EVENT_CHOKE_CHANGE = 'choke_change';
-const PEER_EVENT_REQUEST = 'request';
-const PEER_EVENT_BITFIELD = 'bitfield';
-const PEER_EVENT_HAVE = 'have';
-const PEER_EVENT_INTERESTED_CHANGE = 'interested_change';
-const PEER_EVENT_PIECE = 'piece';
-const PEER_EVENT_CANCEL = 'cancel';
-const PEER_EVENT_PORT = 'port';
-const PEER_EVENT_KEEPALIVE = 'keep_alive';
-const PEER_EVENT_HAVE_ALL = 'have_all';
-const PEER_EVENT_HAVE_NONE = 'have_none';
-const PEER_EVENT_SUGGEST_PIECE = 'suggest_piece';
-const PEER_EVENT_ALLOW_FAST = 'allow_fast';
-const PEER_EVENT_REJECT_REQUEST = 'reject_request';
 
 const ID_CHOKE = 0;
 const ID_UNCHOKE = 1;
@@ -80,7 +63,7 @@ typedef BoolHandle = void Function(Peer peer, bool value);
 
 typedef SingleIntHandle = void Function(Peer peer, int value);
 
-abstract class Peer {
+abstract class Peer with PeerEventDispatcher {
   /// Countdown time , when peer don't receive or send any message from/to remote ,
   /// this class will invoke close.
   /// 单位:秒
@@ -88,14 +71,16 @@ abstract class Peer {
 
   bool _isSeeder = false;
 
+  /// 下载项目的piece总数
   final int _piecesNum;
 
-  // Bitfield _localBitfield;
-
+  /// 远程的Bitfield
   Bitfield _remoteBitfield;
 
+  /// 该peer是否已经disposed
   bool _disposed = false;
 
+  /// 倒计时关闭Timer
   Timer _countdownTimer;
 
   /// 对方是否choke了我，初始默认true
@@ -114,32 +99,37 @@ abstract class Peer {
   // ignore: unused_field
   dynamic _disposeReason;
 
+  /// 远程Peer的地址和端口
   final Uri address;
 
-  int connectTimeOut;
-
+  /// Torrent infohash buffer
   final Uint8List _infoHashBuffer;
 
+  /// Local Peer Id
   final String _localPeerId; // 本机的peer id。发送消息会用到
 
   String _remotePeerId;
 
+  /// has this peer send handshake message already?
   bool _handShaked = false;
 
+  /// 远程数据接受，监听subcription
   StreamSubscription _streamChunk;
 
-  List<int> cacheBuffer = [];
+  /// 从通道中获取数据的buffer
+  List<int> _cacheBuffer = [];
 
-  final _handleFunctions = <String, Set<Function>>{};
+  // /// 所有事件回调方法Map
+  // final _handleFunctions = <String, Set<Function>>{};
 
+  /// 本地发送请求buffer。格式位：[index,begin,length]
   final _requestBuffer = <List<int>>[];
 
+  /// 远程发送请求buffer。格式位：[index,begin,length]
   final _remoteRequestBuffer = <List<int>>[];
 
   /// Every request timeout timer. The key format is `<index>-<begin>`
   final _requestTimeoutMap = <String, Timer>{};
-
-  final _requestTimestamp = <String, int>{};
 
   /// Max request count in one piple ,5
   static const MAX_REQUEST_COUNT = 5;
@@ -147,6 +137,7 @@ abstract class Peer {
   /// single request timeout time, 30 seconds
   static const REQUEST_TIME_OUT = 30;
 
+  /// Peer id。不同于bt协议中的peer id，这个id仅是客户端用于区分peer使用
   final String _id;
 
   int _downloaded = 0;
@@ -159,22 +150,33 @@ abstract class Peer {
 
   bool localEnableFastPeer = true;
 
+  /// 本地的Allow Fast pieces
   final Set<int> _allowFastPieces = <int>{};
 
+  /// 远程发送的Allow Fast pieces
   final Set<int> _remoteAllowFastPieces = <int>{};
 
-  final Set<int> _suggestPieces = <int>{};
+  /// 远程发送的Suggest pieces
+  final Set<int> _remoteSuggestPieces = <int>{};
 
+  ///
+  /// [_id] 是用于区分不同Peer的Id，和[_localPeerId]不同，[_localPeerId]是bt协议中的Peer_id。
+  /// [address]是远程peer的地址和端口，子类在实现的时候可以利用该值进行远程连接。[_infoHashBuffer]
+  /// 是torrent文件中的infohash值，[_piecesNum]是下载项目的总piece数目，用于构建远程`Bitfield`数据
+  /// 使用。可选项[localEnableFastPeer]默认位`true`，表示本地是否开启[Fast Extension(BEP 0006)](http://www.bittorrent.org/beps/bep_0006.html)
   Peer(this._id, this._localPeerId, this.address, this._infoHashBuffer,
       this._piecesNum,
       {this.localEnableFastPeer = true}) {
     _remoteBitfield = Bitfield.createEmptyBitfield(_piecesNum);
   }
 
+  /// 远程的Bitfield
   Bitfield get remoteBitfield => _remoteBitfield;
 
+  /// 从远程下载的总数据量，单位bytes
   int get downloaded => _downloaded;
 
+  /// 上传到远程的总数据量，单位bytes
   int get uploaded => _uploaded;
 
   bool get isLeecher => !_isSeeder;
@@ -185,8 +187,10 @@ abstract class Peer {
 
   String get localPeerId => _localPeerId;
 
+  /// 远程发送的Request请求
   List<List<int>> get remoteRequestbuffer => _remoteRequestBuffer;
 
+  /// 本地发送给远程的Request请求
   List<List<int>> get requestBuffer => _requestBuffer;
 
   set isSeeder(bool b) {
@@ -214,7 +218,7 @@ abstract class Peer {
     if (c != _chokeMe) {
       _chokeMe = c;
       if (_chokeMe) _startTime = -1;
-      _fireChokeChangeEvent(_chokeMe);
+      fireChokeChangeEvent(_chokeMe);
     }
   }
 
@@ -227,43 +231,70 @@ abstract class Peer {
   set interestedMe(bool i) {
     if (i != _interestedMe) {
       _interestedMe = i;
-      _fireInterestedChangeEvent(_interestedMe);
+      fireInterestedChangeEvent(_interestedMe);
     }
+  }
+
+  /// 远程所有的已完成Piece
+  List<int> get remoteCompletePieces {
+    if (_remoteBitfield == null) return [];
+    return _remoteBitfield.completedPieces;
   }
 
   /// Connect remote peer
   Future connect([int timeout = DEFAULT_CONNECT_TIMEOUT]) async {
     try {
-      _disposeReason = null;
-      _disposed = false;
-      _handShaked = false;
+      _init();
       var _stream = await connectRemote(timeout);
       _streamChunk = _stream.listen(_processReceiveData, onDone: () {
         _log('Connection is closed $address');
-        dispose(RemoteCloseException());
+        dispose('远程/本地关闭了连接');
       }, onError: (e) {
+        _log('Error happen: $address');
         dispose(e);
       });
-      _fireConnectEvent();
+      print('$_localPeerId port: ${(_stream as Socket).port}');
+      fireConnectEvent();
     } catch (e) {
       return dispose(e);
     }
+  }
+
+  /// 初始化一些基本数据
+  void _init() {
+    // 初始化数据
+    _disposeReason = null;
+    _disposed = false;
+    _handShaked = false;
+    // 清空通道数据缓存：
+    _cacheBuffer.clear();
+    // 清空请求缓存
+    _requestBuffer.clear();
+    _remoteRequestBuffer.clear();
+    // 重置fast pieces
+    _remoteAllowFastPieces.clear();
+    _allowFastPieces.clear();
+    // 重置suggest pieces
+    _remoteSuggestPieces.clear();
+    // 重置远程fast extension标识
+    remoteEnableFastPeer = false;
+    _startTime = -1;
   }
 
   void _processReceiveData(dynamic data) {
     // 不管收到什么消息，只要不是空的，重置倒计时:
     if (data.isNotEmpty) _startToCountdown();
     // if (data.isNotEmpty) log('收到数据 $data');
-    cacheBuffer.addAll(data); // 接受remote发送数据。缓冲到一处
-    if (cacheBuffer.isEmpty) return;
+    _cacheBuffer.addAll(data); // 接受remote发送数据。缓冲到一处
+    if (_cacheBuffer.isEmpty) return;
     // 查看是不是handshake头
-    if (cacheBuffer[0] == 19 && cacheBuffer.length >= 68) {
-      if (_isHandShakeHead(cacheBuffer)) {
-        if (_validateInfoHash(cacheBuffer)) {
-          var temp = cacheBuffer.sublist(0, 68);
-          cacheBuffer = cacheBuffer.sublist(68);
+    if (_cacheBuffer[0] == 19 && _cacheBuffer.length >= 68) {
+      if (_isHandShakeHead(_cacheBuffer)) {
+        if (_validateInfoHash(_cacheBuffer)) {
+          var temp = _cacheBuffer.sublist(0, 68);
+          _cacheBuffer = _cacheBuffer.sublist(68);
           _processHandShake(temp);
-          if (cacheBuffer.isNotEmpty) {
+          if (_cacheBuffer.isNotEmpty) {
             Future.delayed(Duration.zero, () => _processReceiveData(<int>[]));
           }
           return;
@@ -274,23 +305,23 @@ abstract class Peer {
         }
       }
     }
-    if (cacheBuffer.length >= 4) {
+    if (_cacheBuffer.length >= 4) {
       var length =
-          ByteData.sublistView(Uint8List.fromList(cacheBuffer.sublist(0, 4)))
+          ByteData.sublistView(Uint8List.fromList(_cacheBuffer.sublist(0, 4)))
               .getUint32(0, Endian.big);
       if (length == 0) {
-        cacheBuffer = cacheBuffer.sublist(4);
+        _cacheBuffer = _cacheBuffer.sublist(4);
         _processMessage(<int>[]);
-        if (cacheBuffer.isNotEmpty) {
+        if (_cacheBuffer.isNotEmpty) {
           Future.delayed(Duration.zero, () => _processReceiveData(<int>[]));
         }
       } else {
-        if (cacheBuffer.length - 4 >= length) {
-          var temp = cacheBuffer.sublist(4, length + 4);
-          cacheBuffer = cacheBuffer.sublist(length + 4);
+        if (_cacheBuffer.length - 4 >= length) {
+          var temp = _cacheBuffer.sublist(4, length + 4);
+          _cacheBuffer = _cacheBuffer.sublist(length + 4);
           // print('receive $length datas : $temp , ${temp.length}');
           _processMessage(temp);
-          if (cacheBuffer.isNotEmpty) {
+          if (_cacheBuffer.isNotEmpty) {
             Future.delayed(Duration.zero, () => _processReceiveData(<int>[]));
           }
         }
@@ -316,7 +347,7 @@ abstract class Peer {
   void _processMessage(List<int> message) {
     if (message.isEmpty) {
       _log('process keep alive $address');
-      _fireKeepAlive();
+      fireKeepAlive();
       return;
     } else {
       switch (message[0]) {
@@ -420,13 +451,13 @@ abstract class Peer {
     }
     if (requestIndex != null) {
       _remoteRequestBuffer.removeAt(requestIndex);
-      _fireCancel(index, begin, length);
+      fireCancel(index, begin, length);
     }
   }
 
   void _processPortChange(int port) {
     if (address.port == port) return;
-    _firePortChange(port);
+    firePortChange(port);
   }
 
   void _processHaveAll() {
@@ -442,7 +473,7 @@ abstract class Peer {
     for (var i = index; i < _remoteBitfield.piecesNum; i++) {
       _remoteBitfield.setBit(i, true);
     }
-    _fireRemoteHaveAll();
+    fireRemoteHaveAll();
   }
 
   void _processHaveNone() {
@@ -451,7 +482,7 @@ abstract class Peer {
       return;
     }
     _remoteBitfield = Bitfield.createEmptyBitfield(_piecesNum);
-    _fireRemoteHaveNone();
+    fireRemoteHaveNone();
   }
 
   ///
@@ -464,7 +495,7 @@ abstract class Peer {
     }
     var view = ByteData.view(Uint8List.fromList(message).buffer);
     var index = view.getUint32(offset);
-    if (_suggestPieces.add(index)) _fireSuggestPiece(index);
+    if (_remoteSuggestPieces.add(index)) fireSuggestPiece(index);
   }
 
   void _processRejectRequest(List<int> message, [int offset = 1]) {
@@ -479,8 +510,8 @@ abstract class Peer {
     var length = view.getUint32(offset + 8);
     var match = false;
     var requestIndex;
-    for (var i = 0; i < _remoteRequestBuffer.length; i++) {
-      var r = _remoteRequestBuffer[i];
+    for (var i = 0; i < _requestBuffer.length; i++) {
+      var r = _requestBuffer[i];
       if (r[0] == index && r[1] == begin) {
         match = true;
         requestIndex = i;
@@ -491,8 +522,8 @@ abstract class Peer {
       dispose('Never send request ($index,$begin) but recieve a rejection');
       return;
     }
-    _remoteRequestBuffer.removeAt(requestIndex);
-    _fireRejectRequest(index, begin, length);
+    _requestBuffer.removeAt(requestIndex);
+    fireRejectRequest(index, begin, length);
   }
 
   void _processAllowFast(List<int> message, [int offset = 1]) {
@@ -503,7 +534,7 @@ abstract class Peer {
     var view = ByteData.view(Uint8List.fromList(message).buffer);
     var index = view.getUint32(offset);
     if (_remoteAllowFastPieces.add(index)) {
-      _fireAllowFast(index);
+      fireAllowFast(index);
     }
   }
 
@@ -529,7 +560,7 @@ abstract class Peer {
     if (chokeRemote) {
       if (_allowFastPieces.contains(index)) {
         _remoteRequestBuffer.add([index, begin, length]);
-        _fireRequest(index, begin, length);
+        fireRequest(index, begin, length);
         return;
       } else {
         sendRejectRequest(index, begin, length);
@@ -537,7 +568,7 @@ abstract class Peer {
       }
     }
     _remoteRequestBuffer.add([index, begin, length]);
-    _fireRequest(index, begin, length);
+    fireRequest(index, begin, length);
   }
 
   void _processReceivePiece(List<int> message, [int offset = 1]) {
@@ -546,43 +577,31 @@ abstract class Peer {
     var begin = view.getUint32(offset + 4);
     _removeRequestFromBuffer(index, begin);
     var timer = _requestTimeoutMap.remove('$index-$begin');
-    var timestamp = _requestTimestamp.remove('$index-$begin');
     var timeout = false;
     if (timer == null) {
       // 说明这个piece是超时后收到的
       timeout = true;
     }
-    var now = DateTime.now().millisecondsSinceEpoch;
-    var passtime = 0.0;
-    if (timestamp != null) {
-      passtime = (now - timestamp) * 1.0;
-      passtime = passtime / 1000;
-    }
     timer?.cancel();
     var contentLength = message.length - offset - 8;
     _downloaded += contentLength;
-    _log(
-        '收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes , 平均速度：${downloadSpeed} b/s ');
-    _firePiece(index, begin, message.sublist(offset + 8), timeout);
+    _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
+    firePiece(index, begin, message.sublist(offset + 8), timeout);
   }
 
   void _processHave(int index) {
     updateRemoteBitfield(index, true);
-    _fireHave(index);
+    fireHave(index);
   }
 
+  /// 更新远程Bitfield
   void updateRemoteBitfield(int index, bool have) {
     _remoteBitfield.setBit(index, have);
   }
 
-  List<int> get remoteCompletePieces {
-    if (_remoteBitfield == null) return [];
-    return _remoteBitfield.completedPieces;
-  }
-
   void initRemoteBitfield(List<int> bitfield) {
     _remoteBitfield = Bitfield.copyFrom(_piecesNum, bitfield, 1);
-    _fireBitfield(_remoteBitfield);
+    fireBitfield(_remoteBitfield);
   }
 
   void _processHandShake(List<int> data) {
@@ -590,7 +609,7 @@ abstract class Peer {
     var reseverd = data.getRange(20, 28);
     var fast = reseverd.elementAt(7) & 0x04;
     remoteEnableFastPeer = (fast == 0x04);
-    _fireHandshakeEvent(_remotePeerId, data);
+    fireHandshakeEvent(_remotePeerId, data);
   }
 
   String _parseRemotePeerId(dynamic data) {
@@ -683,7 +702,7 @@ abstract class Peer {
   /// - index: integer specifying the zero-based piece index
   /// - begin: integer specifying the zero-based byte offset within the piece
   /// - block: block of data, which is a subset of the piece specified by index.
-  bool sendPiece(int index, int begin, Uint8List block) {
+  bool sendPiece(int index, int begin, List<int> block) {
     if (chokeRemote) {
       if (!remoteEnableFastPeer) {
         return false;
@@ -737,7 +756,6 @@ abstract class Peer {
       _requestTimeout(index, begin, length);
     });
     _requestTimeoutMap['$index-$begin'] = t;
-    _requestTimestamp['$index-$begin'] = DateTime.now().millisecondsSinceEpoch;
     var bytes = Uint8List(12);
     var view = ByteData.view(bytes.buffer);
     view.setUint32(0, index, Endian.big);
@@ -751,7 +769,7 @@ abstract class Peer {
   void _requestTimeout(int index, int begin, int length) {
     _requestTimeoutMap.remove('$index-$begin');
     // _removeRequestFromBuffer(index, begin);
-    _fireRequestTimeoutEvent(index, begin, length);
+    fireRequestTimeoutEvent(index, begin, length);
   }
 
   /// `bitfield: <len=0001+X><id=5><bitfield>`
@@ -768,7 +786,7 @@ abstract class Peer {
   ///
   void sendBitfield(Bitfield bitfield) {
     _log('发送bitfile信息给对方 : ${bitfield.buffer}');
-    if (remoteEnableFastPeer) {
+    if (remoteEnableFastPeer && localEnableFastPeer) {
       if (bitfield.haveNone()) {
         sendHaveNone();
       } else if (bitfield.haveAll()) {
@@ -850,7 +868,7 @@ abstract class Peer {
   ///
   /// Have all message
   void sendHaveAll() {
-    if (remoteEnableFastPeer) {
+    if (remoteEnableFastPeer && localEnableFastPeer) {
       sendMessage(OP_HAVE_ALL);
     }
   }
@@ -859,7 +877,7 @@ abstract class Peer {
   ///
   /// Have none message
   void sendHaveNone() {
-    if (remoteEnableFastPeer) {
+    if (remoteEnableFastPeer && localEnableFastPeer) {
       sendMessage(OP_HAVE_NONE);
     }
   }
@@ -878,7 +896,7 @@ abstract class Peer {
   /// the suggested pieces are equally appropriate.
   ///
   void sendSuggestPiece(int index) {
-    if (remoteEnableFastPeer) {
+    if (remoteEnableFastPeer && localEnableFastPeer) {
       var bytes = Uint8List(4);
       var view = ByteData.view(bytes.buffer);
       view.setUint32(0, index, Endian.big);
@@ -893,7 +911,7 @@ abstract class Peer {
   /// Reject Request notifies a requesting peer that its request will not be satisfied.
   ///
   void sendRejectRequest(int index, int begin, int length) {
-    if (remoteEnableFastPeer) {
+    if (remoteEnableFastPeer && localEnableFastPeer) {
       var bytes = Uint8List(12);
       var view = ByteData.view(bytes.buffer);
       view.setUint32(0, index, Endian.big);
@@ -914,11 +932,13 @@ abstract class Peer {
   ///  optimistic unchokes but cannot sufficiently reciprocate to remain unchoked.
   ///
   void sendAllowFast(int index) {
-    if (remoteEnableFastPeer) {
-      var bytes = Uint8List(4);
-      var view = ByteData.view(bytes.buffer);
-      view.setUint32(0, index, Endian.big);
-      sendMessage(OP_ALLOW_FAST, bytes);
+    if (remoteEnableFastPeer && localEnableFastPeer) {
+      if (_allowFastPieces.add(index)) {
+        var bytes = Uint8List(4);
+        var view = ByteData.view(bytes.buffer);
+        view.setUint32(0, index, Endian.big);
+        sendMessage(OP_ALLOW_FAST, bytes);
+      }
     }
   }
 
@@ -942,255 +962,18 @@ abstract class Peer {
     _disposeReason = reason;
     if (_disposed) return;
     _disposed = true;
-    _fireDisposeEvent(reason);
-    _handleFunctions.clear();
     _handShaked = false;
+    fireDisposeEvent(reason);
+    clearEventHandles();
     var re = _streamChunk?.cancel();
     _streamChunk = null;
     _requestTimeoutMap.forEach((key, value) {
       value.cancel();
     });
     _requestTimeoutMap.clear();
-    _requestTimestamp.clear();
     _countdownTimer?.cancel();
     _countdownTimer = null;
     return re;
-  }
-
-  Set<Function> _getFunctionSet(String key) {
-    var fSet = _handleFunctions[key];
-    if (fSet == null) {
-      fSet = <Function>{};
-      _handleFunctions[key] = fSet;
-    }
-    return fSet;
-  }
-
-  void _fireConnectEvent() {
-    var fSet = _handleFunctions[PEER_EVENT_CONNECTED];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this));
-    });
-  }
-
-  void _fireRequestTimeoutEvent(int index, int begin, int length) {
-    var fSet = _handleFunctions[PEER_EVENT_REQUEST_TIMEOUT];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, index, begin, length));
-    });
-  }
-
-  void _fireDisposeEvent([dynamic reason]) {
-    var fSet = _handleFunctions[PEER_EVENT_CLOSE];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, reason));
-    });
-  }
-
-  void _fireHandshakeEvent(String remotePeerId, dynamic data) {
-    var fSet = _handleFunctions[PEER_EVENT_HANDSHAKE];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, remotePeerId, data));
-    });
-  }
-
-  void _fireChokeChangeEvent(bool choke) {
-    var fSet = _handleFunctions[PEER_EVENT_CHOKE_CHANGE];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, choke));
-    });
-  }
-
-  void _fireInterestedChangeEvent(bool interested) {
-    var fSet = _handleFunctions[PEER_EVENT_INTERESTED_CHANGE];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, interested));
-    });
-  }
-
-  void _fireKeepAlive() {
-    var fSet = _handleFunctions[PEER_EVENT_KEEPALIVE];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this));
-    });
-  }
-
-  void _fireRequest(int index, int begin, int length) {
-    var fSet = _handleFunctions[PEER_EVENT_REQUEST];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, index, begin, length));
-    });
-  }
-
-  void _fireBitfield(final Bitfield bitfield) {
-    var fSet = _handleFunctions[PEER_EVENT_BITFIELD];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, bitfield));
-    });
-  }
-
-  void _firePiece(int index, int begin, List<int> block,
-      [bool afterTimeout = false]) {
-    var fSet = _handleFunctions[PEER_EVENT_PIECE];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, index, begin, block, afterTimeout));
-    });
-  }
-
-  void _fireHave(dynamic index) {
-    var fSet = _handleFunctions[PEER_EVENT_HAVE];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, index));
-    });
-  }
-
-  void _fireCancel(int index, int begin, int length) {
-    var fSet = _handleFunctions[PEER_EVENT_CANCEL];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, index, begin, length));
-    });
-  }
-
-  void _firePortChange(int port) {
-    var fSet = _handleFunctions[PEER_EVENT_PORT];
-    fSet?.forEach((f) {
-      f(this, port);
-    });
-  }
-
-  void _fireRemoteHaveAll() {
-    var fSet = _handleFunctions[PEER_EVENT_HAVE_ALL];
-    fSet?.forEach((f) {
-      f(this);
-    });
-  }
-
-  void _fireRemoteHaveNone() {
-    var fSet = _handleFunctions[PEER_EVENT_HAVE_NONE];
-    fSet?.forEach((f) {
-      f(this);
-    });
-  }
-
-  void _fireSuggestPiece(int index) {
-    var fSet = _handleFunctions[PEER_EVENT_SUGGEST_PIECE];
-    fSet?.forEach((f) {
-      f(this, index);
-    });
-  }
-
-  void _fireAllowFast(int index) {
-    var fSet = _handleFunctions[PEER_EVENT_ALLOW_FAST];
-    fSet?.forEach((f) {
-      f(this, index);
-    });
-  }
-
-  void _fireRejectRequest(int index, int begin, int length) {
-    var fSet = _handleFunctions[PEER_EVENT_REJECT_REQUEST];
-    fSet?.forEach((f) {
-      f(this, index, begin, length);
-    });
-  }
-
-  bool onRejectRequest(PieceConfigHandle handle) {
-    return _onPieceConfigCallback(handle, PEER_EVENT_REJECT_REQUEST);
-  }
-
-  bool onAllowFast(SingleIntHandle handle) {
-    return _onSingleIntCallback(handle, PEER_EVENT_ALLOW_FAST);
-  }
-
-  bool onSuggestPiece(SingleIntHandle handle) {
-    return _onSingleIntCallback(handle, PEER_EVENT_SUGGEST_PIECE);
-  }
-
-  bool onHaveAll(NoneParamHandle handle) {
-    return _onNoneParamCallback(handle, PEER_EVENT_HAVE_ALL);
-  }
-
-  bool onHaveNone(NoneParamHandle handle) {
-    return _onNoneParamCallback(handle, PEER_EVENT_HAVE_NONE);
-  }
-
-  bool onCancel(PieceConfigHandle handle) {
-    return _onPieceConfigCallback(handle, PEER_EVENT_CANCEL);
-  }
-
-  bool onPortChange(SingleIntHandle handle) {
-    return _onSingleIntCallback(handle, PEER_EVENT_PORT);
-  }
-
-  bool onHave(SingleIntHandle handle) {
-    return _onSingleIntCallback(handle, PEER_EVENT_HAVE);
-  }
-
-  bool onPiece(
-      Function(Peer peer, int index, int begin, List<int> block,
-              bool afterTimeout)
-          handle) {
-    var list = _getFunctionSet(PEER_EVENT_PIECE);
-    return list.add(handle);
-  }
-
-  bool onBitfield(Function(Peer peer, Bitfield bitfield) handle) {
-    var list = _getFunctionSet(PEER_EVENT_BITFIELD);
-    return list.add(handle);
-  }
-
-  bool onKeepalive(NoneParamHandle handle) {
-    return _onNoneParamCallback(handle, PEER_EVENT_KEEPALIVE);
-  }
-
-  bool onChokeChange(BoolHandle handle) {
-    return _onBoolCallback(handle, PEER_EVENT_CHOKE_CHANGE);
-  }
-
-  bool onInterestedChange(BoolHandle handle) {
-    return _onBoolCallback(handle, PEER_EVENT_INTERESTED_CHANGE);
-  }
-
-  bool onRequest(PieceConfigHandle handle) {
-    return _onPieceConfigCallback(handle, PEER_EVENT_REQUEST);
-  }
-
-  bool onRequestTimeout(PieceConfigHandle handle) {
-    return _onPieceConfigCallback(handle, PEER_EVENT_REQUEST_TIMEOUT);
-  }
-
-  bool onHandShake(
-      Function(Peer peer, String remotePeerId, dynamic data) handle) {
-    var list = _getFunctionSet(PEER_EVENT_HANDSHAKE);
-    return list.add(handle);
-  }
-
-  bool onConnect(NoneParamHandle handle) {
-    return _onNoneParamCallback(handle, PEER_EVENT_CONNECTED);
-  }
-
-  bool onDispose(Function(Peer peer, [dynamic reason]) handle) {
-    var list = _getFunctionSet(PEER_EVENT_CLOSE);
-    return list.add(handle);
-  }
-
-  bool _onNoneParamCallback(NoneParamHandle handle, String type) {
-    var list = _getFunctionSet(type);
-    return list.add(handle);
-  }
-
-  bool _onPieceConfigCallback(PieceConfigHandle handle, String type) {
-    var list = _getFunctionSet(type);
-    return list.add(handle);
-  }
-
-  bool _onBoolCallback(BoolHandle handle, String type) {
-    var list = _getFunctionSet(type);
-    return list.add(handle);
-  }
-
-  bool _onSingleIntCallback(SingleIntHandle handle, String type) {
-    var list = _getFunctionSet(type);
-    return list.add(handle);
   }
 
   void _log(String message, [dynamic error]) {

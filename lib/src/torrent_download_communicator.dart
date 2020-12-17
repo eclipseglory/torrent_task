@@ -55,7 +55,8 @@ class TorrentDownloadCommunicator {
   }
 
   void hookPeer(Peer peer) {
-    if (_peerExsist(peer.id)) return;
+    if (_peerExsist(peer)) return;
+    peer.onDispose(_processPeerDispose);
     peer.onBitfield(_processBitfieldUpdate);
     peer.onHaveAll((peer) => _processBitfieldUpdate(peer, peer.remoteBitfield));
     peer.onHaveNone((peer) => _processBitfieldUpdate(peer, null));
@@ -71,13 +72,15 @@ class TorrentDownloadCommunicator {
     peer.connect();
   }
 
-  bool _peerExsist(String id) {
+  bool _peerExsist(Peer id) {
     return interestedPeers.contains(id) ||
         notInterestedPeers.contains(id) ||
         noResponsePeers.contains(id);
   }
 
-  void _pieceWrittenComplete(int index) {
+  void _pieceWrittenComplete(int index) async {
+    // 先要更新完本地才去通知远程
+    await _fileManager.updateBitfield(index);
     interestedPeers.forEach((peer) {
       // if (!peer.remoteHave(index)) {
       log('收到完整片段，通知 ${peer.address} : $index');
@@ -90,7 +93,6 @@ class TorrentDownloadCommunicator {
       peer.sendHave(index);
       // }
     });
-    _fileManager.updateBitfield(index);
   }
 
   // void _sendKeepAliveToNotInterseted() {
@@ -127,25 +129,17 @@ class TorrentDownloadCommunicator {
     }
   }
 
-  void _processRejectRequest(Peer peer, int index, int begin, int length) {
+  void _processRejectRequest(dynamic source, int index, int begin, int length) {
     var piece = _pieceProvider[index];
-    piece?.pushSubPiece(begin ~/ DEFAULT_REQUEST_LENGTH);
+    piece?.pushSubPieceLast(begin ~/ DEFAULT_REQUEST_LENGTH);
   }
 
-  void _processPeerDispose(Peer peer, [dynamic reason]) {
+  void _processPeerDispose(dynamic source, [dynamic reason]) {
+    var peer = source as Peer;
     var bufferRequests = peer.requestBuffer;
-    var msg = 'Peer已销毁, ${peer.address},退还收到未收到Request:$bufferRequests,将其删除';
-    if (reason != null) {
-      if (reason is RemoteCloseException) {
-        log(msg, error: '远程/本地关闭了连接', name: runtimeType.toString());
-      } else if (reason is TimeoutException) {
-        log(msg, error: '对方超时未响应', name: runtimeType.toString());
-      } else {
-        log(msg, error: reason, name: runtimeType.toString());
-      }
-    } else {
-      log(msg, name: runtimeType.toString());
-    }
+    log('Peer已销毁, ${peer.address},退还收到未收到Request:$bufferRequests,将其删除',
+        error: reason, name: runtimeType.toString());
+
     log('目前还有 ${interestedPeers.length}个活跃节点');
     bufferRequests.forEach((element) {
       var pindex = element[0];
@@ -158,19 +152,24 @@ class TorrentDownloadCommunicator {
     completedPieces.forEach((index) {
       _pieceProvider[index]?.removeAvalidatePeer(peer.id);
     });
-    interestedPeers.remove(peer.id);
-    notInterestedPeers.remove(peer.id);
-    noResponsePeers.remove(peer.id);
+    interestedPeers.remove(peer);
+    notInterestedPeers.remove(peer);
+    noResponsePeers.remove(peer);
   }
 
-  void _peerConnected(Peer peer) {
+  void _peerConnected(dynamic source) {
+    var peer = source as Peer;
     print('${peer.address} is connected');
-    peer.onDispose(_processPeerDispose);
     noResponsePeers.add(peer);
     peer.sendHandShake();
   }
 
-  void _requestPieces(Peer peer, [int pieceIndex = -1]) {
+  void _requestPieces(dynamic source, [int pieceIndex = -1]) {
+    var peer = source as Peer;
+    if (peer.address.host == '127.0.0.1') {
+      // TODO DEBUG
+      print('hjere');
+    }
     var piece;
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
@@ -192,8 +191,9 @@ class TorrentDownloadCommunicator {
     }
   }
 
-  void _processReceivePiece(
-      Peer peer, int index, int begin, List<int> block, bool afterTimeout) {
+  void _processReceivePiece(dynamic source, int index, int begin,
+      List<int> block, bool afterTimeout) {
+    var peer = source as Peer;
     var rindex = -1;
     for (var i = 0; i < _timeoutRequest.length; i++) {
       var tr = _timeoutRequest[i];
@@ -210,22 +210,29 @@ class TorrentDownloadCommunicator {
     var nextIndex = _pieceManager.selectPieceWhenReceiveData(
         peer.id, peer.remoteCompletePieces, index, begin);
     _fileManager.writeFile(index, begin, block);
+    if (nextIndex == -1) {
+      // TODO DEBG
+      print('dafda');
+    }
     _requestPieces(peer, nextIndex);
   }
 
-  void _processPeerHandshake(Peer peer, remotePeerId, data) {
+  void _processPeerHandshake(dynamic source, String remotePeerId, data) {
+    var peer = source as Peer;
     print('handshake ${peer.address}:$remotePeerId');
     noResponsePeers.remove(peer);
     notInterestedPeers.add(peer);
     peer.sendBitfield(_fileManager.localBitfield);
   }
 
-  void _processRemoteRequest(Peer peer, int index, int begin, int length) {
+  void _processRemoteRequest(dynamic source, int index, int begin, int length) {
+    var peer = source as Peer;
     _remoteRequest.add([index, begin, peer]);
     _fileManager.readFile(index, begin, length);
   }
 
-  void _processBitfieldUpdate(Peer peer, Bitfield bitfield) {
+  void _processBitfieldUpdate(dynamic source, Bitfield bitfield) {
+    var peer = source as Peer;
     log('bitfield updated : ${peer.address}');
     if (bitfield != null) {
       if (peer.interestedRemote) return; // 避免有些发送have all同时发送bitfield的客户端
@@ -246,18 +253,25 @@ class TorrentDownloadCommunicator {
     peer.sendInterested(false);
   }
 
-  void _processHaveUpdate(Peer peer, int index) {
-    if (!peer.interestedRemote && !_fileManager.localHave(index)) {
+  void _processHaveUpdate(dynamic source, int index) {
+    var peer = source as Peer;
+    if (peer.address.host == '127.0.0.1') {
+      // TODO DEBUG
+      print('hhh');
+    }
+    if (!_fileManager.localHave(index)) {
       peer.sendInterested(true);
       log('${peer.address} 有我要的资源，发送 interested');
       notInterestedPeers.remove(peer);
       interestedPeers.add(peer);
+      _pieceProvider[index]?.addAvalidatePeer(peer.id);
+      Timer.run(() => _requestPieces(peer));
       return;
     }
-    // piecesManager[index].addOwnerPeer(peer.id);
   }
 
-  void _processChokeChange(Peer peer, bool choke) {
+  void _processChokeChange(dynamic source, bool choke) {
+    var peer = source as Peer;
     // 更新pieces的可用Peer
     if (!choke) {
       var completedPieces = peer.remoteCompletePieces;
@@ -274,7 +288,8 @@ class TorrentDownloadCommunicator {
     }
   }
 
-  void _processInterestedChange(Peer peer, bool interested) {
+  void _processInterestedChange(dynamic source, bool interested) {
+    var peer = source as Peer;
     if (interested) {
       peer.sendChoke(false);
     } else {
@@ -282,9 +297,12 @@ class TorrentDownloadCommunicator {
     }
   }
 
-  void _processRequestTimeout(Peer peer, int index, int begin, int length) {
+  void _processRequestTimeout(
+      dynamic source, int index, int begin, int length) {
     // 如果超时，将该subpiece放入piece的subpiece队尾，然后重新请求
-    _timeoutRequest.add([index, begin]);
+    var peer = source as Peer;
+    _addTimeoutRequest(index, begin, length);
+    // _timeoutRequest.add([index, begin]);
     log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
         name: runtimeType.toString());
     // var subIndex = begin ~/ DEFAULT_REQUEST_LENGTH;
@@ -300,7 +318,19 @@ class TorrentDownloadCommunicator {
     }
   }
 
+  bool _addTimeoutRequest(int index, int begin, int length) {
+    for (var i = 0; i < _timeoutRequest.length; i++) {
+      var r = _timeoutRequest[i];
+      if (r[0] == index && r[1] == begin) {
+        return false;
+      }
+    }
+    _timeoutRequest.add([index, begin, length]);
+    return true;
+  }
+
   void stop() {
-    keepAliveTimer?.cancel();
+    // TODO implement it
+    // keepAliveTimer?.cancel();
   }
 }

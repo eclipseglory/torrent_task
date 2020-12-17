@@ -20,7 +20,7 @@ abstract class TorrentTask {
 
   double get uploadSpeed;
 
-  void start();
+  Future start();
 
   void stop();
 
@@ -29,6 +29,8 @@ abstract class TorrentTask {
   void resume();
 
   void delete();
+
+  void addPeer(Uri host, Uri peer);
 }
 
 class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
@@ -97,8 +99,17 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     return _communicator;
   }
 
-  void _whenTaskDownloadComplete() {
-    _tracker.complete();
+  @override
+  void addPeer(Uri host, Uri peer) {
+    _tracker?.addPeer(host, peer, _metaInfo.infoHash);
+  }
+
+  void _whenTaskDownloadComplete() async {
+    var results = await _tracker.complete();
+    results.forEach((element) {
+      print(element);
+    });
+    print('全部下载完毕');
   }
 
   void _whenFileDownloadComplete(String filePath) {}
@@ -131,7 +142,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         _peerId,
         Uri(host: socket.address.host, port: socket.port),
         _infoHashBuffer,
-        piecesNum);
+        piecesNum,
+        socket);
     _communicator.hookPeer(p);
   }
 
@@ -156,7 +168,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  void start() async {
+  Future start() async {
     _startTime = DateTime.now().millisecondsSinceEpoch;
     // 进入的peer：
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
@@ -175,6 +187,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _fileManager.onAllComplete(_whenTaskDownloadComplete);
     _fileManager.onFileWriteComplete(_whenFileDownloadComplete);
     _tracker.start(true);
+    return Uri(host: _serverSocket.address.address, port: _serverSocket.port);
   }
 
   @override
@@ -186,9 +199,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   Future<Map<String, dynamic>> getOptions(Uri uri, String infoHash) {
     var map = {
-      'downloaded': _stateFile?.downloaded,
-      'uploaded': _stateFile?.uploaded,
-      'left': _metaInfo.length - _stateFile.downloaded,
+      'downloaded': 0,//_stateFile?.downloaded,
+      'uploaded': 0,//_stateFile?.uploaded,
+      'left': _metaInfo.length,// - _stateFile.downloaded,
       'numwant': 50,
       'compact': 1,
       'peerId': _peerId,

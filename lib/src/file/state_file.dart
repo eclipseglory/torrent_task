@@ -61,6 +61,7 @@ class StateFile {
       // _access = await _access.setPosition(_bitfield.buffer.length - 1);
       // var d = Uint8List(16);
       // _access = await _access.writeFrom(d);
+      await _access.flush();
       await _access.close();
       _access = null;
     } else {
@@ -107,8 +108,9 @@ class StateFile {
     _bitfield.setBit(index, have);
     try {
       var access = await getAccess();
-      await access.setPosition(0);
-      await access.writeFrom(_bitfield.buffer);
+      var i = index ~/ 8;
+      await access.setPosition(i);
+      await access.writeByte(_bitfield.buffer[i]);
       await access.flush();
       c.complete(true);
     } catch (e) {
@@ -208,9 +210,10 @@ class StateFile {
     try {
       await _ss?.cancel();
       await _sc?.close();
+      await _access?.flush();
       await _access?.close();
     } catch (e) {
-      print(e);
+      log('关闭状态文件出错：', error: e, name: runtimeType.toString());
     } finally {
       _access = null;
       _ss = null;

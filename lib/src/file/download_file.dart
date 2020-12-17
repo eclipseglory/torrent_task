@@ -130,7 +130,7 @@ class DownloadFile {
       int position = event['position'];
       int length = event['length'];
 
-      var access = await _getRandomAccessFile(WRITE);
+      var access = await _getRandomAccessFile(READ);
       access = await access.setPosition(position);
       var contents = await access.read(length);
       _totalUploaded += length;
@@ -166,7 +166,9 @@ class DownloadFile {
     try {
       await _ss?.cancel();
       await _sc?.close();
+      await _randomAccess?.flush();
       await _randomAccess?.close();
+      await _readAccess?.flush();
       await _readAccess?.close();
     } catch (e) {
       log('Close file error:', error: e, name: runtimeType.toString());
