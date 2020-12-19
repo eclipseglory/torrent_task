@@ -11,7 +11,7 @@ import 'peer/peer.dart';
 import 'peer/tcp_peer.dart';
 import 'piece/base_piece_selector.dart';
 import 'piece/piece_manager.dart';
-import 'torrent_download_communicator.dart';
+import 'peer/peers_manager.dart';
 
 abstract class TorrentTask {
   factory TorrentTask.newTask(Torrent metaInfo, String savePath) {
@@ -45,7 +45,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   DownloadFileManager _fileManager;
 
-  TorrentDownloadCommunicator _communicator;
+  PeersManager _peersManager;
 
   final Torrent _metaInfo;
 
@@ -84,8 +84,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     return (_stateFile.uploaded - _startUploaded) / passed;
   }
 
-  Future<TorrentDownloadCommunicator> init(
-      Torrent model, String savePath) async {
+  Future<PeersManager> init(Torrent model, String savePath) async {
     _tracker ??=
         TorrentAnnounceTracker(model.announces.toList(), _infoHashBuffer, this);
     if (_stateFile == null) {
@@ -97,9 +96,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         BasePieceSelector(), model, _stateFile.bitfield);
     _fileManager ??= await DownloadFileManager.createFileManager(
         model, savePath, _stateFile);
-    _communicator ??=
-        TorrentDownloadCommunicator(_pieceManager, _pieceManager, _fileManager);
-    return _communicator;
+    _peersManager ??= PeersManager(_pieceManager, _pieceManager, _fileManager);
+    return _peersManager;
   }
 
   @override
@@ -110,9 +108,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   void _whenTaskDownloadComplete() async {
     var results = await _tracker.complete();
     var peers = <Peer>{};
-    peers.addAll(_communicator.interestedPeers);
-    peers.addAll(_communicator.notInterestedPeers);
-    peers.addAll(_communicator.noResponsePeers);
+    peers.addAll(_peersManager.interestedPeers);
+    peers.addAll(_peersManager.notInterestedPeers);
+    peers.addAll(_peersManager.noResponsePeers);
 
     peers.forEach((peer) {
       if (peer.isSeeder) {
@@ -145,7 +143,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         print('Try to connect peer : $id');
         _peers.add(id);
         var p = TCPPeer(id, _peerId, url, _infoHashBuffer, piecesNum);
-        _communicator.hookPeer(p);
+        _peersManager.hookPeer(p);
       });
     }
   }
@@ -161,7 +159,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         _infoHashBuffer,
         piecesNum,
         socket);
-    _communicator.hookPeer(p);
+    _peersManager.hookPeer(p);
   }
 
   @override
@@ -202,7 +200,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     // 主动访问的peer:
     _tracker.onPeerEvent(_hookCommunicator);
     _tracker.onAllAnnounceOver(_whenTrackerOverOneturn);
-    _communicator.onAllComplete(_whenTaskDownloadComplete);
+    _peersManager.onAllComplete(_whenTaskDownloadComplete);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
     _tracker.start(true);
     return Uri(host: _serverSocket.address.address, port: _serverSocket.port);

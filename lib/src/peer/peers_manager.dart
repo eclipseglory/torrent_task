@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:developer';
 
-import 'file/download_file_manager.dart';
-
-import 'peer/bitfield.dart';
-import 'peer/peer.dart';
-import 'piece/piece_manager.dart';
-import 'piece/piece_provider.dart';
-import 'utils.dart';
+import 'bitfield.dart';
+import 'peer.dart';
+import '../file/download_file_manager.dart';
+import '../piece/piece_manager.dart';
+import '../piece/piece.dart';
+import '../piece/piece_provider.dart';
+import '../utils.dart';
 
 const MAX_ACTIVE_PEERS = 50;
 
@@ -16,11 +16,7 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 ///
 /// TODO:
 /// - 没有处理Suggest Piece
-class TorrentDownloadCommunicator {
-  // final Map<String, Peer> readyPeersMap = {};
-  // final Map<String, Peer> avalidatePeersMap = {};
-  // final Map<String, Peer> disposedPeersMap = {};
-
+class PeersManager {
   final Set<Peer> interestedPeers = {};
   final Set<Peer> notInterestedPeers = {};
   final Set<Peer> noResponsePeers = {};
@@ -49,8 +45,7 @@ class TorrentDownloadCommunicator {
 
   Timer keepAliveTimer;
 
-  TorrentDownloadCommunicator(
-      this._pieceManager, this._pieceProvider, this._fileManager) {
+  PeersManager(this._pieceManager, this._pieceProvider, this._fileManager) {
     assert(_pieceManager != null &&
         _pieceProvider != null &&
         _fileManager != null);
@@ -188,7 +183,7 @@ class TorrentDownloadCommunicator {
     if (piece != null) {
       piece.addAvalidatePeer(peer.id);
     }
-    _requestPieces(source, index);
+    if (piece.haveAvalidateSubPiece()) _requestPieces(source, index);
   }
 
   void _processRejectRequest(dynamic source, int index, int begin, int length) {
@@ -230,16 +225,25 @@ class TorrentDownloadCommunicator {
 
   void _requestPieces(dynamic source, [int pieceIndex = -1]) {
     var peer = source as Peer;
-    var piece;
+    Piece piece;
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
     } else {
       piece = _pieceManager.selectPiece(
           peer.id, peer.remoteCompletePieces, _pieceProvider);
     }
-    if (piece == null) return;
+    if (piece == null) {
+      if (_timeoutRequest.isNotEmpty) {
+        // 如果已经没有可以请求的piece，看看超时piece
+        var timeoutR = _timeoutRequest.removeAt(0);
+        if (!peer.sendRequest(timeoutR[0], timeoutR[1], timeoutR[2])) {
+          _timeoutRequest.insert(0, timeoutR);
+        }
+      }
+      return;
+    }
     var subIndex = piece.popSubPiece();
-    var size = DEFAULT_REQUEST_LENGTH;
+    var size = DEFAULT_REQUEST_LENGTH; // block大小现算
     var begin = subIndex * size;
     if ((begin + size) > piece.byteLength) {
       size = piece.byteLength - begin;
@@ -255,7 +259,7 @@ class TorrentDownloadCommunicator {
     var rindex = -1;
     for (var i = 0; i < _timeoutRequest.length; i++) {
       var tr = _timeoutRequest[i];
-      if (tr[0] == index && tr[1] == begin) {
+      if (tr[0] == index && tr[1] == begin && tr[2] == block.length) {
         log('超时Request[$index,$begin]已从${peer.address}获得，当前超时Request:$_timeoutRequest',
             name: runtimeType.toString());
         rindex = i;
@@ -289,10 +293,9 @@ class TorrentDownloadCommunicator {
     var peer = source as Peer;
     log('bitfield updated : ${peer.address}');
     if (bitfield != null) {
-      if (peer.interestedRemote) return; // 避免有些发送have all同时发送bitfield的客户端
+      if (peer.interestedRemote) return;
       for (var i = 0; i < _fileManager.piecesNumber; i++) {
         if (bitfield.getBit(i)) {
-          // piecesManager[i].addOwnerPeer(peer.id);
           if (!peer.interestedRemote && !_fileManager.localHave(i)) {
             peer.sendInterested(true);
             notInterestedPeers.remove(peer);
@@ -310,13 +313,12 @@ class TorrentDownloadCommunicator {
   void _processHaveUpdate(dynamic source, int index) {
     var peer = source as Peer;
     if (!_fileManager.localHave(index)) {
+      log('${peer.address} 有我要的资源，发送 interested并更新piece的avalidate peer');
       peer.sendInterested(true);
-      log('${peer.address} 有我要的资源，发送 interested');
       notInterestedPeers.remove(peer);
       interestedPeers.add(peer);
       _pieceProvider[index]?.addAvalidatePeer(peer.id);
       Timer.run(() => _requestPieces(peer));
-      return;
     }
   }
 
@@ -343,20 +345,17 @@ class TorrentDownloadCommunicator {
     if (interested) {
       peer.sendChoke(false);
     } else {
-      peer.sendChoke(true);
+      peer.sendChoke(true); // 不感兴趣就choke它
     }
   }
 
   void _processRequestTimeout(
       dynamic source, int index, int begin, int length) {
-    // 如果超时，将该subpiece放入piece的subpiece队尾，然后重新请求
     var peer = source as Peer;
+    // 如果超时，不会重新请求，等待。实在不来会在销毁peer的时候释放所有它对应的请求
     _addTimeoutRequest(index, begin, length);
-    // _timeoutRequest.add([index, begin]);
     log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
         name: runtimeType.toString());
-    // var subIndex = begin ~/ DEFAULT_REQUEST_LENGTH;
-    // piecesManager[index]?.pushSubPieceLast(subIndex);
     if (_pieceProvider[index] != null) {
       if (_pieceProvider[index].haveAvalidateSubPiece()) {
         _requestPieces(peer, index);
@@ -368,6 +367,7 @@ class TorrentDownloadCommunicator {
     }
   }
 
+  /// 往time out request buffer中记录
   bool _addTimeoutRequest(int index, int begin, int length) {
     for (var i = 0; i < _timeoutRequest.length; i++) {
       var r = _timeoutRequest[i];

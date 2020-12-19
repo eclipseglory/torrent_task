@@ -187,6 +187,14 @@ class DownloadFile {
     return;
   }
 
+  Future flush() async {
+    try {
+      await _randomAccess?.flush();
+    } catch (e) {
+      log('Flush file error:', error: e, name: runtimeType.toString());
+    }
+  }
+
   Future delete() async {
     await close();
     return _file?.delete();

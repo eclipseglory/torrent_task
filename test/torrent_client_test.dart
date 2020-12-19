@@ -118,6 +118,15 @@ void main() {
         assert(remain == size);
       }
     });
+
+    test('piece length less than 16kb', () {
+      var p = Piece('aaaaaaa', 0, DEFAULT_REQUEST_LENGTH - 100);
+      var l = p.avalidateSubPieceCount;
+      assert(l == 1);
+      var sp = p.popSubPiece();
+      assert(sp == 0);
+      assert(!p.haveAvalidateSubPiece());
+    });
   });
 
   group('test same piece find - ', () {

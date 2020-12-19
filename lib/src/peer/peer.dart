@@ -111,6 +111,9 @@ abstract class Peer with PeerEventDispatcher {
   /// has this peer send handshake message already?
   bool _handShaked = false;
 
+  /// has this peer send local bitfield to remote?
+  bool _bitfieldSended = false;
+
   /// 远程数据接受，监听subcription
   StreamSubscription _streamChunk;
 
@@ -170,6 +173,9 @@ abstract class Peer with PeerEventDispatcher {
 
   /// 远程的Bitfield
   Bitfield get remoteBitfield => _remoteBitfield;
+
+  /// 是否已经发送local bitfield给对方
+  bool get bitfieldSended => _bitfieldSended;
 
   /// 从远程下载的总数据量，单位bytes
   int get downloaded => _downloaded;
@@ -782,6 +788,8 @@ abstract class Peer with PeerEventDispatcher {
   ///
   void sendBitfield(Bitfield bitfield) {
     _log('发送bitfile信息给对方 : ${bitfield.buffer}');
+    if (_bitfieldSended) return;
+    _bitfieldSended = true;
     if (remoteEnableFastPeer && localEnableFastPeer) {
       if (bitfield.haveNone()) {
         sendHaveNone();
