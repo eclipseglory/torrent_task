@@ -10,5 +10,5 @@ Future<void> main() async {
   await task.start();
   // 自己下载自己
   task.addPeer(
-      Uri(host: '127.0.0.1', port: 55182), Uri(host: '127.0.0.1', port: 55182));
+      Uri(host: '127.0.0.1', port: 51056), Uri(host: '127.0.0.1', port: 51056));
 }

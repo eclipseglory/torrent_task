@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
+import 'package:torrent_client/src/file/download_file.dart';
 import 'package:torrent_client/src/peer/bitfield.dart';
 import 'package:torrent_client/src/file/state_file.dart';
 import 'package:torrent_client/src/piece/piece.dart';
@@ -180,7 +182,7 @@ void main() {
       assert(stateFile.uploaded == 0);
 
       var updatePiece = <int>{};
-      for (var i = 0; i < stateFile.bitfield.piecesNum ~/ 2; i++) {
+      for (var i = 0; i < stateFile.bitfield.piecesNum ~/ 4; i++) {
         var index = randomInt(stateFile.bitfield.piecesNum);
         updatePiece.add(index);
         await stateFile.updateBitfield(index, true);
@@ -191,10 +193,6 @@ void main() {
       updateList.sort((a, b) => a - b);
       var list = stateFile.bitfield.completedPieces;
       assert(list.length == updateList.length);
-
-      await stateFile.updateDownloaded(123456789);
-      assert(stateFile.downloaded == 123456789);
-
       await stateFile.updateUploaded(987654321);
       assert(stateFile.uploaded == 987654321);
 
@@ -214,8 +212,6 @@ void main() {
         var v = ByteData.view(Uint8List.fromList(data).buffer);
         var offset = stateFile.bitfield.buffer.length;
         var re = v.getUint64(offset);
-        assert(re == stateFile.downloaded);
-        re = v.getUint64(offset + 8);
         assert(re == stateFile.uploaded);
         locker.complete();
       }, onError: (e) => locker.complete());
@@ -225,7 +221,10 @@ void main() {
       b = torrent.pieces.length ~/ 8;
       if (b * 8 != torrent.pieces.length) b++;
       assert(stateFile.bitfield.length == b);
-      assert(stateFile.downloaded == 123456789);
+      var sd = stateFile.bitfield.completedPieces.length * torrent.pieceLength;
+      sd = sd - (torrent.pieceLength - torrent.lastPriceLength);
+      assert(stateFile.downloaded == sd);
+      print('download: $sd');
       assert(stateFile.uploaded == 987654321);
 
       for (var i = 0; i < stateFile.bitfield.completedPieces.length; i++) {
@@ -239,6 +238,34 @@ void main() {
       assert(await t.exists());
       await stateFile.delete();
       assert(!await t.exists());
+    });
+  });
+
+  group('Temp file access - ', () {
+    test('Create/Read/Write/Delete', () async {
+      var content = 'DART-TORRENT-CLIENT';
+      var buffer = utf8.encode(content);
+      var file = DownloadFile('test/test.txt', 0, buffer.length);
+      assert(await file.requestWrite(0, buffer, 0, buffer.length));
+      var bytes = await file.requestRead(0, buffer.length);
+      var result = String.fromCharCodes(bytes);
+      assert(result == content, '验证读取内容错误');
+      await file.close();
+      var file1 = File('test/test.txt');
+      assert(await file1.exists());
+      var b = <int>[];
+      var lock = Completer();
+      file1.openRead().listen((data) {
+        b.addAll(data);
+      }, onDone: () {
+        var result = String.fromCharCodes(b);
+        assert(result == content, '验证文件内容错误');
+        lock.complete();
+      });
+      await lock.future;
+      await file.delete();
+      file1 = File('test/test.txt');
+      assert(!await file1.exists(), '文件删除错误');
     });
   });
 }

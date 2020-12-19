@@ -8,7 +8,7 @@ import 'piece_selector.dart';
 /// 基本策略为：
 ///
 /// - `Piece`可用`Peer`数量最多
-/// - 在可用`Peer`数量都相同的情况下，选用子`Piece`数量最少的
+/// - 在可用`Peer`数量都相同的情况下，选用`Sub Piece`数量最少的
 class BasePieceSelector implements PieceSelector {
   @override
   List<Piece> selectPiece(
@@ -17,8 +17,9 @@ class BasePieceSelector implements PieceSelector {
     var a;
     var startIndex;
     for (var i = 0; i < piecesIndexList.length; i++) {
-      if (provider[piecesIndexList[i]] != null) {
-        a = provider[piecesIndexList[i]];
+      var p = provider[piecesIndexList[i]];
+      if (p != null && p.haveAvalidateSubPiece() && p.haveAvalidatePeers()) {
+        a = p;
         startIndex = i;
         break;
       }

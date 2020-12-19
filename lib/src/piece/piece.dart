@@ -30,6 +30,9 @@ class Piece {
     if (requestLength <= 0) {
       throw Exception('Request length should bigger than zero');
     }
+    if (requestLength > DEFAULT_REQUEST_LENGTH) {
+      throw Exception('Request length should smaller than 16kb');
+    }
     _subPiecesCount = byteLength ~/ requestLength;
     if (_subPiecesCount * requestLength != byteLength) {
       _subPiecesCount++;

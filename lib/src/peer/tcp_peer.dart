@@ -26,7 +26,6 @@ class TCPPeer extends Peer {
   @override
   Future dispose([reason]) async {
     try {
-      await _socket?.flush();
       await _socket?.close();
       _socket = null;
     } finally {

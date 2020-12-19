@@ -2,9 +2,8 @@ import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 
-const ONE_M = 1024 * 1024;
-
 const READ = 'read';
+const FLUSH = 'flush';
 const WRITE = 'write';
 
 typedef FileDownloadCompleteHandle = void Function(String filePath);
@@ -16,17 +15,13 @@ class DownloadFile {
 
   final int length;
 
-  int _bufferSize = 0;
+  File _file;
 
   RandomAccessFile _randomAccess;
 
   RandomAccessFile _readAccess;
 
-  int _totalDownloaded = 0;
-
-  int _totalUploaded = 0;
-
-  final List<FileDownloadCompleteHandle> _fileDownloadCompleteHandle = [];
+  // final List<FileDownloadCompleteHandle> _fileDownloadCompleteHandle = [];
 
   StreamController _sc;
 
@@ -45,8 +40,8 @@ class DownloadFile {
   /// `READ`/`WRITE` which first come in the operation stack completing.
   ///
   Future<bool> requestWrite(
-      int position, List<int> block, int start, int end, int pieceIndex) async {
-    _randomAccess ??= await _getRandomAccessFile(WRITE);
+      int position, List<int> block, int start, int end) async {
+    _randomAccess ??= await getRandomAccessFile(WRITE);
     var completer = Completer<bool>();
     _sc.add({
       'type': WRITE,
@@ -59,9 +54,8 @@ class DownloadFile {
     return completer.future;
   }
 
-  Future<List<int>> requestRead(
-      int position, int length, int pieceIndex) async {
-    _readAccess ??= await _getRandomAccessFile(READ);
+  Future<List<int>> requestRead(int position, int length) async {
+    _readAccess ??= await getRandomAccessFile(READ);
     var completer = Completer<List<int>>();
     _sc.add({
       'type': READ,
@@ -79,20 +73,14 @@ class DownloadFile {
     _ss.pause();
     if (event['type'] == WRITE) {
       await _write(event);
-    } else {
-      if (event['type'] == READ) {
-        await _read(event);
-      }
+    }
+    if (event['type'] == READ) {
+      await _read(event);
+    }
+    if (event['type'] == FLUSH) {
+      await _flush(event);
     }
     _ss.resume();
-  }
-
-  void onFileDownloadCompleteHandle(FileDownloadCompleteHandle handle) {
-    _fileDownloadCompleteHandle.add(handle);
-  }
-
-  void offFileDownloadCompleteHandle(FileDownloadCompleteHandle handle) {
-    _fileDownloadCompleteHandle.remove(handle);
   }
 
   void _write(event) async {
@@ -103,23 +91,32 @@ class DownloadFile {
       int end = event['end'];
       List<int> block = event['block'];
 
-      _randomAccess = await _getRandomAccessFile(WRITE);
+      _randomAccess = await getRandomAccessFile(WRITE);
       _randomAccess = await _randomAccess.setPosition(position);
       _randomAccess = await _randomAccess.writeFrom(block, start, end);
-      _bufferSize += block.length;
-      _totalDownloaded += block.length;
-      if (_bufferSize >= ONE_M) {
-        await _randomAccess.flush();
-        _bufferSize = 0;
-      }
-      if (_totalDownloaded >= length) {
-        _fileDownloadCompleteHandle.forEach((handle) {
-          Timer.run(() => handle(filePath));
-        });
-      }
       completer.complete(true);
     } catch (e) {
       log('Write file error:', error: e, name: runtimeType.toString());
+      completer.complete(false);
+    }
+  }
+
+  /// 请求将缓冲区写入磁盘
+  Future<bool> requestFlush() async {
+    _readAccess ??= await getRandomAccessFile(WRITE);
+    var completer = Completer<bool>();
+    _sc.add({'type': FLUSH, 'completer': completer});
+    return completer.future;
+  }
+
+  void _flush(event) async {
+    Completer completer = event['completer'];
+    try {
+      _randomAccess = await getRandomAccessFile(WRITE);
+      await _randomAccess.flush();
+      completer.complete(true);
+    } catch (e) {
+      log('Flush error:', error: e, name: runtimeType.toString());
       completer.complete(false);
     }
   }
@@ -130,10 +127,9 @@ class DownloadFile {
       int position = event['position'];
       int length = event['length'];
 
-      var access = await _getRandomAccessFile(READ);
+      var access = await getRandomAccessFile(READ);
       access = await access.setPosition(position);
       var contents = await access.read(length);
-      _totalUploaded += length;
       completer.complete(contents);
     } catch (e) {
       log('Read file error:', error: e, name: runtimeType.toString());
@@ -141,15 +137,26 @@ class DownloadFile {
     }
   }
 
-  Future<RandomAccessFile> _getRandomAccessFile(String type) async {
-    var file = File(filePath);
-    var exists = await file.exists();
+  ///
+  /// 获取对应文件，如果文件不存在会创建一个新文件
+  Future<File> get file async {
+    if (filePath == null) return null;
+    _file ??= File(filePath);
+    var exists = await _file.exists();
     if (!exists) {
-      file = await file.create(recursive: true);
+      _file = await _file.create(recursive: true);
+      var access = await _file.open(mode: FileMode.write);
+      access = await access.truncate(length);
+      await access.close();
     }
+    return _file;
+  }
+
+  Future<RandomAccessFile> getRandomAccessFile(String type) async {
+    var file = await this.file;
     var access;
     if (type == WRITE) {
-      _randomAccess ??= await file.open(mode: FileMode.write);
+      _randomAccess ??= await file.open(mode: FileMode.writeOnlyAppend);
       access = _randomAccess;
     } else if (type == READ) {
       _readAccess ??= await file.open(mode: FileMode.read);
@@ -168,7 +175,6 @@ class DownloadFile {
       await _sc?.close();
       await _randomAccess?.flush();
       await _randomAccess?.close();
-      await _readAccess?.flush();
       await _readAccess?.close();
     } catch (e) {
       log('Close file error:', error: e, name: runtimeType.toString());
@@ -183,8 +189,6 @@ class DownloadFile {
 
   Future delete() async {
     await close();
-    var file = File(filePath);
-    var exists = await file.exists();
-    if (exists) return file.delete();
+    return _file?.delete();
   }
 }

@@ -7,6 +7,7 @@ import 'package:torrent_tracker/torrent_tracker.dart';
 
 import 'file/download_file_manager.dart';
 import 'file/state_file.dart';
+import 'peer/peer.dart';
 import 'peer/tcp_peer.dart';
 import 'piece/base_piece_selector.dart';
 import 'piece/piece_manager.dart';
@@ -16,7 +17,7 @@ abstract class TorrentTask {
   factory TorrentTask.newTask(Torrent metaInfo, String savePath) {
     return _TorrentTask(metaInfo, savePath);
   }
-  double get downloadSpeed;
+  Future<double> get downloadSpeed;
 
   double get uploadSpeed;
 
@@ -31,6 +32,8 @@ abstract class TorrentTask {
   void delete();
 
   void addPeer(Uri host, Uri peer);
+
+  TorrentAnnounceTracker get tracker;
 }
 
 class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
@@ -44,9 +47,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   TorrentDownloadCommunicator _communicator;
 
-  Torrent _metaInfo;
+  final Torrent _metaInfo;
 
-  String _savePath;
+  final String _savePath;
 
   final Set<String> _peers = {};
 
@@ -68,7 +71,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  double get downloadSpeed {
+  Future<double> get downloadSpeed async {
     if (_startTime == null || _startTime <= 0) return 0.0;
     var passed = DateTime.now().millisecondsSinceEpoch - _startTime;
     return (_stateFile.downloaded - _startDownloaded) / passed;
@@ -106,13 +109,27 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   void _whenTaskDownloadComplete() async {
     var results = await _tracker.complete();
+    var peers = <Peer>{};
+    peers.addAll(_communicator.interestedPeers);
+    peers.addAll(_communicator.notInterestedPeers);
+    peers.addAll(_communicator.noResponsePeers);
+
+    peers.forEach((peer) {
+      if (peer.isSeeder) {
+        peer.dispose('Download complete,disconnect seeder: ${peer.address}');
+      }
+    });
+
+    // TODO DEBUG , need to remove later
     results.forEach((element) {
       print(element);
     });
     print('全部下载完毕');
   }
 
-  void _whenFileDownloadComplete(String filePath) {}
+  void _whenFileDownloadComplete(String filePath) {
+    print('$filePath 下载完成');
+  }
 
   void _whenTrackerOverOneturn(int totalTrackers) {
     _peers.clear();
@@ -180,12 +197,13 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         '已经下载${_stateFile.bitfield.completedPieces.length}个片段，共有${_stateFile.bitfield.piecesNum}个片段');
     print('下载:${_stateFile.downloaded / (1024 * 1024)} mb');
     print('上传:${_stateFile.uploaded / (1024 * 1024)} mb');
-    print('剩余:${_metaInfo.length - _stateFile.downloaded / (1024 * 1024)} mb');
+    print(
+        '剩余:${(_metaInfo.length - _stateFile.downloaded) / (1024 * 1024)} mb');
     // 主动访问的peer:
     _tracker.onPeerEvent(_hookCommunicator);
     _tracker.onAllAnnounceOver(_whenTrackerOverOneturn);
-    _fileManager.onAllComplete(_whenTaskDownloadComplete);
-    _fileManager.onFileWriteComplete(_whenFileDownloadComplete);
+    _communicator.onAllComplete(_whenTaskDownloadComplete);
+    _fileManager.onFileComplete(_whenFileDownloadComplete);
     _tracker.start(true);
     return Uri(host: _serverSocket.address.address, port: _serverSocket.port);
   }
@@ -199,9 +217,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   Future<Map<String, dynamic>> getOptions(Uri uri, String infoHash) {
     var map = {
-      'downloaded': 0,//_stateFile?.downloaded,
-      'uploaded': 0,//_stateFile?.uploaded,
-      'left': _metaInfo.length,// - _stateFile.downloaded,
+      'downloaded': 0, //await _stateFile?.downloaded,
+      'uploaded': _stateFile?.uploaded,
+      'left': _metaInfo.length, //- await _stateFile.downloaded,
       'numwant': 50,
       'compact': 1,
       'peerId': _peerId,
@@ -209,4 +227,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     };
     return Future.value(map);
   }
+
+  @override
+  // TODO: implement tracker
+  TorrentAnnounceTracker get tracker => _tracker;
 }

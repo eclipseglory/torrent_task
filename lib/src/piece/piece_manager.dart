@@ -39,9 +39,6 @@ class PieceManager implements PieceProvider {
       }
       var piece = Piece(metaInfo.pieces[i], i, byteLength);
       if (!bitfield.getBit(i)) _pieces[i] = piece;
-      // if (localBitfield.getBit(i)) {
-      //   _completedPieces.add(i);
-      // }
     }
   }
 
@@ -159,6 +156,7 @@ class PieceManager implements PieceProvider {
   /// - 从`_downloadingPieces`列表中删除
   /// - 通知监听器
   void _processCompletePiece(int index) {
+    if (_pieces[index] == null) return;
     _pieces[index] = null;
     _donwloadingPieces.remove(index);
     _pieceCompleteHandles.forEach((handle) {

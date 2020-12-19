@@ -69,8 +69,6 @@ abstract class Peer with PeerEventDispatcher {
   /// 单位:秒
   int countdownTime = 150;
 
-  bool _isSeeder = false;
-
   /// 下载项目的piece总数
   final int _piecesNum;
 
@@ -179,9 +177,14 @@ abstract class Peer with PeerEventDispatcher {
   /// 上传到远程的总数据量，单位bytes
   int get uploaded => _uploaded;
 
-  bool get isLeecher => !_isSeeder;
+  bool get isLeecher => !isSeeder;
 
-  bool get isSeeder => _isSeeder;
+  /// 如果具备完整的torrent文件，那它就是一个seeder
+  bool get isSeeder {
+    if (_remoteBitfield == null) return false;
+    if (_remoteBitfield.haveAll()) return true;
+    return false;
+  }
 
   String get remotePeerId => _remotePeerId;
 
@@ -192,13 +195,6 @@ abstract class Peer with PeerEventDispatcher {
 
   /// 本地发送给远程的Request请求
   List<List<int>> get requestBuffer => _requestBuffer;
-
-  set isSeeder(bool b) {
-    if (_isSeeder != b) {
-      _isSeeder = b;
-      sendChoke(_isSeeder);
-    }
-  }
 
   String get id => _id;
 
@@ -959,8 +955,8 @@ abstract class Peer with PeerEventDispatcher {
   /// 被dispose后的peer将无法再发送或监听数据，状态数据也恢复到初始状态，并且之前添加的事件监听
   /// 器都会被移除。
   Future dispose([dynamic reason]) async {
-    _disposeReason = reason;
     if (_disposed) return;
+    _disposeReason = reason;
     _disposed = true;
     _handShaked = false;
     fireDisposeEvent(reason);

@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:developer';
 
-import 'package:torrent_tracker/torrent_tracker.dart';
-
 import 'file/download_file_manager.dart';
 
 import 'peer/bitfield.dart';
@@ -13,9 +11,10 @@ import 'utils.dart';
 
 const MAX_ACTIVE_PEERS = 50;
 
+const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
+
 ///
-/// TODO LIST:
-/// - 没有处理Allow Fast
+/// TODO:
 /// - 没有处理Suggest Piece
 class TorrentDownloadCommunicator {
   // final Map<String, Peer> readyPeersMap = {};
@@ -26,9 +25,13 @@ class TorrentDownloadCommunicator {
   final Set<Peer> notInterestedPeers = {};
   final Set<Peer> noResponsePeers = {};
 
+  final Set<void Function()> _allcompletehandles = {};
+
   final List<List<int>> _timeoutRequest = [];
 
   int _uploaded = 0;
+
+  int _uploadedNotifySize = 0;
 
   final List<List> _remoteRequest = [];
 
@@ -38,9 +41,13 @@ class TorrentDownloadCommunicator {
 
   final PieceManager _pieceManager;
 
-  Timer keepAliveTimer;
+  final _flushStream = StreamController<List<int>>();
 
-  final _peerSet = <String>[];
+  final _flushBuffer = <int>{};
+
+  StreamSubscription _flushStreamS;
+
+  Timer keepAliveTimer;
 
   TorrentDownloadCommunicator(
       this._pieceManager, this._pieceProvider, this._fileManager) {
@@ -48,8 +55,7 @@ class TorrentDownloadCommunicator {
         _pieceProvider != null &&
         _fileManager != null);
     // hook FileManager and PieceManager
-    _fileManager
-        .onSubPieceWriteComplete(_pieceManager.processSubPieceWriteComplete);
+    _fileManager.onSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.onSubPieceReadComplete(readSubpieceComplete);
     _pieceManager.onPieceComplete(_pieceWrittenComplete);
   }
@@ -69,6 +75,7 @@ class TorrentDownloadCommunicator {
     peer.onRequest(_processRemoteRequest);
     peer.onRequestTimeout(_processRequestTimeout);
     peer.onRejectRequest(_processRejectRequest);
+    peer.onAllowFast(_processAllowFast);
     peer.connect();
   }
 
@@ -78,9 +85,17 @@ class TorrentDownloadCommunicator {
         noResponsePeers.contains(id);
   }
 
+  void _processSubPieceWriteComplte(int pieceIndex, int begin, int length) {
+    _pieceManager.processSubPieceWriteComplete(pieceIndex, begin, length);
+  }
+
   void _pieceWrittenComplete(int index) async {
+    // 防止多次更新
+    if (_fileManager.localHave(index)) return;
     // 先要更新完本地才去通知远程
-    await _fileManager.updateBitfield(index);
+    var success = await _fileManager.updateBitfield(index);
+    if (!success) return;
+
     interestedPeers.forEach((peer) {
       // if (!peer.remoteHave(index)) {
       log('收到完整片段，通知 ${peer.address} : $index');
@@ -93,6 +108,39 @@ class TorrentDownloadCommunicator {
       peer.sendHave(index);
       // }
     });
+    // TODO flush和写入以及下载速度不匹配，这导致会重复flush，
+    // 目前用一个buffer缓存需要flush的pieceindex，但问题没有彻底解决
+    _flushBuffer.add(index);
+    _flushStreamS ??= _flushStream.stream.listen((piecesIndieces) async {
+      _flushStreamS?.pause();
+      await _fileManager.flushPiece(piecesIndieces);
+      // 等到完全将缓冲区写入磁盘再验证是否全部成
+      if (_fileManager.localBitfield.completedPieces.length ==
+          _pieceManager.length) {
+        _fireAllComplete();
+      }
+      _flushStreamS?.resume();
+    });
+    if (!_flushStream.isPaused) {
+      if (_flushBuffer.isEmpty) return;
+      var temp = List<int>.from(_flushBuffer);
+      _flushBuffer.clear();
+      _flushStream.add(temp);
+    }
+  }
+
+  void _fireAllComplete() {
+    _allcompletehandles.forEach((element) {
+      Timer.run(() => element());
+    });
+  }
+
+  bool onAllComplete(void Function() h) {
+    return _allcompletehandles.add(h);
+  }
+
+  bool offAllComplete(void Function() h) {
+    return _allcompletehandles.remove(h);
   }
 
   // void _sendKeepAliveToNotInterseted() {
@@ -116,6 +164,7 @@ class TorrentDownloadCommunicator {
         if (peer != null && !peer.isDisposed) {
           if (peer.sendPiece(pieceIndex, begin, block)) {
             _uploaded += block.length;
+            _uploadedNotifySize += block.length;
           }
         }
         break;
@@ -125,8 +174,21 @@ class TorrentDownloadCommunicator {
       dindex.forEach((i) {
         _remoteRequest.removeAt(i);
       });
-      _fileManager.updateUpload(_uploaded);
+      if (_uploadedNotifySize >= MAX_UPLOADED_NOTIFY_SIZE) {
+        _uploadedNotifySize = 0;
+        _fileManager.updateUpload(_uploaded);
+      }
     }
+  }
+
+  /// 即使对方choke了我，也可以下载
+  void _processAllowFast(dynamic source, int index) {
+    var peer = source as Peer;
+    var piece = _pieceProvider[index];
+    if (piece != null) {
+      piece.addAvalidatePeer(peer.id);
+    }
+    _requestPieces(source, index);
   }
 
   void _processRejectRequest(dynamic source, int index, int begin, int length) {
@@ -140,12 +202,13 @@ class TorrentDownloadCommunicator {
     log('Peer已销毁, ${peer.address},退还收到未收到Request:$bufferRequests,将其删除',
         error: reason, name: runtimeType.toString());
 
-    log('目前还有 ${interestedPeers.length}个活跃节点');
     bufferRequests.forEach((element) {
       var pindex = element[0];
       var begin = element[1];
+      var length = element[2];
       var piece = _pieceManager[pindex];
       var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
+      _removeTimeoutRequest(pindex, begin, length);
       piece?.pushSubPiece(subindex);
     });
     var completedPieces = peer.remoteCompletePieces;
@@ -155,21 +218,18 @@ class TorrentDownloadCommunicator {
     interestedPeers.remove(peer);
     notInterestedPeers.remove(peer);
     noResponsePeers.remove(peer);
+    log('目前还有 ${interestedPeers.length}个活跃节点. ');
   }
 
   void _peerConnected(dynamic source) {
     var peer = source as Peer;
-    print('${peer.address} is connected');
+    log('${peer.address} is connected', name: runtimeType.toString());
     noResponsePeers.add(peer);
     peer.sendHandShake();
   }
 
   void _requestPieces(dynamic source, [int pieceIndex = -1]) {
     var peer = source as Peer;
-    if (peer.address.host == '127.0.0.1') {
-      // TODO DEBUG
-      print('hjere');
-    }
     var piece;
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
@@ -177,9 +237,7 @@ class TorrentDownloadCommunicator {
       piece = _pieceManager.selectPiece(
           peer.id, peer.remoteCompletePieces, _pieceProvider);
     }
-    if (piece == null) {
-      return;
-    }
+    if (piece == null) return;
     var subIndex = piece.popSubPiece();
     var size = DEFAULT_REQUEST_LENGTH;
     var begin = subIndex * size;
@@ -207,13 +265,9 @@ class TorrentDownloadCommunicator {
     if (rindex != -1) {
       _timeoutRequest.removeAt(rindex);
     }
+    _fileManager.writeFile(index, begin, block);
     var nextIndex = _pieceManager.selectPieceWhenReceiveData(
         peer.id, peer.remoteCompletePieces, index, begin);
-    _fileManager.writeFile(index, begin, block);
-    if (nextIndex == -1) {
-      // TODO DEBG
-      print('dafda');
-    }
     _requestPieces(peer, nextIndex);
   }
 
@@ -255,10 +309,6 @@ class TorrentDownloadCommunicator {
 
   void _processHaveUpdate(dynamic source, int index) {
     var peer = source as Peer;
-    if (peer.address.host == '127.0.0.1') {
-      // TODO DEBUG
-      print('hhh');
-    }
     if (!_fileManager.localHave(index)) {
       peer.sendInterested(true);
       log('${peer.address} 有我要的资源，发送 interested');
@@ -321,12 +371,28 @@ class TorrentDownloadCommunicator {
   bool _addTimeoutRequest(int index, int begin, int length) {
     for (var i = 0; i < _timeoutRequest.length; i++) {
       var r = _timeoutRequest[i];
-      if (r[0] == index && r[1] == begin) {
+      if (r[0] == index && r[1] == begin && length == r[2]) {
         return false;
       }
     }
     _timeoutRequest.add([index, begin, length]);
     return true;
+  }
+
+  bool _removeTimeoutRequest(int index, int begin, int length) {
+    var di;
+    for (var i = 0; i < _timeoutRequest.length; i++) {
+      var r = _timeoutRequest[i];
+      if (r[0] == index && r[1] == begin && r[2] == length) {
+        di = i;
+        break;
+      }
+    }
+    if (di != null) {
+      _timeoutRequest.removeAt(di);
+      return true;
+    }
+    return false;
   }
 
   void stop() {

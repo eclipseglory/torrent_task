@@ -17,11 +17,11 @@ const UPLOADED_TYPE = 'uploaded';
 class StateFile {
   Bitfield _bitfield;
 
-  int _downloaded = 0;
-
   int _uploaded = 0;
 
-  StateFile();
+  final Torrent metainfo;
+
+  StateFile(this.metainfo);
 
   RandomAccessFile _access;
 
@@ -33,14 +33,20 @@ class StateFile {
 
   static Future<StateFile> getStateFile(
       String directoryPath, Torrent metainfo) async {
-    var stateFile = StateFile();
+    var stateFile = StateFile(metainfo);
     await stateFile.init(directoryPath, metainfo);
     return stateFile;
   }
 
   Bitfield get bitfield => _bitfield;
 
-  int get downloaded => _downloaded;
+  int get downloaded {
+    var _downloaded = bitfield.completedPieces.length * metainfo.pieceLength;
+    if (bitfield.completedPieces.contains(bitfield.piecesNum - 1)) {
+      _downloaded -= metainfo.pieceLength - metainfo.lastPriceLength;
+    }
+    return _downloaded;
+  }
 
   int get uploaded => _uploaded;
 
@@ -54,152 +60,86 @@ class StateFile {
     var exists = await _bitfieldFile.exists();
     if (!exists) {
       _bitfieldFile = await _bitfieldFile.create(recursive: true);
-      _access = await _bitfieldFile.open(mode: FileMode.write);
       _bitfield = Bitfield.createEmptyBitfield(metainfo.pieces.length);
-      _access = await _access.writeFrom(_bitfield.buffer);
-      // 不必写入，写入0，不会增加文件长度
-      // _access = await _access.setPosition(_bitfield.buffer.length - 1);
-      // var d = Uint8List(16);
-      // _access = await _access.writeFrom(d);
-      await _access.flush();
-      await _access.close();
-      _access = null;
+      _uploaded = 0;
+      var acc = await _bitfieldFile.open(mode: FileMode.writeOnly);
+      acc = await acc.truncate(_bitfield.length + 8);
+      await acc.close();
     } else {
-      // 注意，如果上传和下载都是0，会导致整个文件长度仅有bitfield的buffer长度
       var bytes = await _bitfieldFile.readAsBytes();
       var piecesNum = metainfo.pieces.length;
       var bitfieldBufferLength = piecesNum ~/ 8;
       if (bitfieldBufferLength * 8 != piecesNum) bitfieldBufferLength++;
       _bitfield = Bitfield.copyFrom(piecesNum, bytes, 0, bitfieldBufferLength);
       var view = ByteData.view(bytes.buffer);
-      try {
-        _downloaded = view.getUint64(_bitfield.length);
-      } catch (e) {
-        _downloaded = 0;
-      }
-      try {
-        _uploaded = view.getUint64(_bitfield.length + 8);
-      } catch (e) {
-        _uploaded = 0;
-        ;
-      }
+      _uploaded = view.getUint64(_bitfield.length);
     }
 
     return _bitfieldFile;
   }
 
-  Future<bool> updateBitfield(int index, [bool have = true]) async {
-    if (_bitfield.getBit(index) == have) return false;
+  Future<bool> update(int index, {bool have = true, int uploaded = 0}) async {
     _access = await getAccess();
     var completer = Completer<bool>();
     _sc.add({
-      'type': BITFIELD_TYPE,
       'index': index,
+      'uploaded': uploaded,
       'have': have,
       'completer': completer
     });
     return completer.future;
   }
 
-  Future<void> _updateBitfield(event) async {
+  Future<void> _update(event) async {
     int index = event['index'];
+    int uploaded = event['uploaded'];
     bool have = event['have'];
     Completer c = event['completer'];
+    if (_bitfield.getBit(index) == have && _uploaded == uploaded) {
+      c.complete(false);
+      return;
+    }
     _bitfield.setBit(index, have);
+    _uploaded = uploaded;
     try {
       var access = await getAccess();
       var i = index ~/ 8;
       await access.setPosition(i);
       await access.writeByte(_bitfield.buffer[i]);
+      await access.setPosition(_bitfield.buffer.length);
+      var data = Uint8List(8);
+      var d = ByteData.view(data.buffer);
+      d.setUint64(0, uploaded);
+      access = await access.writeFrom(data);
       await access.flush();
       c.complete(true);
     } catch (e) {
-      log('Record bitfield [$index] error :',
+      log('Update bitfield piece:[$index],uploaded:$uploaded error :',
           error: e, name: runtimeType.toString());
       c.complete(false);
     }
     return;
   }
 
-  Future<bool> updateDownloaded(int downloaded) async {
-    if (_downloaded == downloaded) return false;
-    _downloaded = downloaded;
-    _access = await getAccess();
-    var completer = Completer<bool>();
-    _sc.add({
-      'type': DOWNLOADED_TYPE,
-      'downloaded': downloaded,
-      'completer': completer
-    });
-    return completer.future;
+  Future<bool> updateBitfield(int index, [bool have = true]) async {
+    if (_bitfield.getBit(index) == have) return false;
+    return update(index, have: have, uploaded: _uploaded);
   }
 
   Future<bool> updateUploaded(int uploaded) async {
     if (_uploaded == uploaded) return false;
-    _uploaded = uploaded;
-    _access = await getAccess();
-    var completer = Completer<bool>();
-    _sc.add(
-        {'type': UPLOADED_TYPE, 'uploaded': uploaded, 'completer': completer});
-    return completer.future;
-  }
-
-  Future<void> _updateUploaded(event) async {
-    int uploaded = event['uploaded'];
-    Completer c = event['completer'];
-    try {
-      _uploaded = uploaded;
-      var access = await getAccess();
-      access = await access.setPosition(_bitfield.buffer.length + 8);
-      var data = Uint8List(8);
-      var d = ByteData.view(data.buffer);
-      d.setUint64(0, _uploaded);
-      access = await access.writeFrom(data);
-      await access.flush();
-      c.complete(true);
-    } catch (e) {
-      log('Record uploaded error :', error: e, name: runtimeType.toString());
-      c.complete(false);
-    }
-    return;
-  }
-
-  Future<void> _updateDownloaded(event) async {
-    int downloaded = event['downloaded'];
-    Completer c = event['completer'];
-    try {
-      var access = await getAccess();
-      access = await access.setPosition(_bitfield.buffer.length);
-      var data = Uint8List(8);
-      var d = ByteData.view(data.buffer);
-      d.setUint64(0, downloaded);
-      access = await access.writeFrom(data);
-      await access.flush();
-      c.complete(true);
-    } catch (e) {
-      log('Record downloaded error :', error: e, name: runtimeType.toString());
-      c.complete(false);
-    }
-    return;
+    return update(-1, uploaded: uploaded);
   }
 
   void _processRequest(event) async {
     _ss.pause();
-    if (event['type'] == BITFIELD_TYPE) {
-      await _updateBitfield(event);
-    }
-    if (event['type'] == DOWNLOADED_TYPE) {
-      await _updateDownloaded(event);
-    }
-    if (event['type'] == UPLOADED_TYPE) {
-      await _updateUploaded(event);
-    }
+    await _update(event);
     _ss.resume();
   }
 
   Future<RandomAccessFile> getAccess() async {
     if (_access == null) {
-      _access = await _bitfieldFile.open(mode: FileMode.write);
+      _access = await _bitfieldFile.open(mode: FileMode.writeOnlyAppend);
       _sc = StreamController();
       _ss = _sc.stream.listen(_processRequest, onError: (e) => print(e));
     }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:developer';
+import 'dart:math' as math;
 
 import 'package:torrent_client/src/peer/bitfield.dart';
 import 'package:torrent_model/torrent_model.dart';
@@ -16,28 +17,30 @@ typedef SubPieceReadHandle = void Function(
 class DownloadFileManager {
   final Torrent metainfo;
 
-  final Map<int, List<DownloadFile>> _piece2fileMap = {};
+  List<List<DownloadFile>> _piece2fileMap;
+
+  final Map<String, List<int>> _file2pieceMap = {};
 
   final List<SubPieceCompleteHandle> _subPieceCompleteHandles = [];
 
+  final List<SubPieceCompleteHandle> _subPieceFailedHandles = [];
+
   final List<SubPieceReadHandle> _subPieceReadHandles = [];
 
-  final List<void Function(String path)> _fileWriteCompleteHandles = [];
-
-  final List<void Function()> _allCompleteHandles = [];
-
-  int _totalDownloaded = 0;
+  final List<void Function(String path)> _fileCompleteHandles = [];
 
   final StateFile _stateFile;
 
   /// TODO
   /// - 没有建立文件读取缓存
-  DownloadFileManager(this.metainfo, this._stateFile);
+  DownloadFileManager(this.metainfo, this._stateFile) {
+    _piece2fileMap = List(_stateFile.bitfield.piecesNum);
+  }
 
   static Future<DownloadFileManager> createFileManager(
       Torrent metainfo, String localDirectory, StateFile stateFile) {
     var manager = DownloadFileManager(metainfo, stateFile);
-    manager._totalDownloaded = stateFile.downloaded;
+    // manager._totalDownloaded = stateFile.downloaded;
     return manager._init(localDirectory);
   }
 
@@ -59,20 +62,15 @@ class DownloadFileManager {
   int get piecesNumber => _stateFile.bitfield.piecesNum;
 
   void _subPieceWriteComplete(int pieceIndex, int begin, int length) {
-    _totalDownloaded += length;
-
     _subPieceCompleteHandles.forEach((handle) {
       Timer.run(() => handle(pieceIndex, begin, length));
     });
-    _stateFile.updateDownloaded(_totalDownloaded);
-    log('已写入磁盘 : ${_totalDownloaded / ONE_M}MB ， ${((_totalDownloaded / metainfo.length) * 10000).toInt() / 100}%',
-        name: runtimeType.toString());
-    if (_totalDownloaded >= metainfo.length) {
-      log('所有内容下载完成 ${metainfo.name}');
-      _allCompleteHandles.forEach((handle) {
-        handle();
-      });
-    }
+  }
+
+  void _subPieceWriteFailed(int pieceIndex, int begin, int length) {
+    _subPieceFailedHandles.forEach((handle) {
+      Timer.run(() => handle(pieceIndex, begin, length));
+    });
   }
 
   Future<bool> updateBitfield(int index, [bool have = true]) {
@@ -89,47 +87,78 @@ class DownloadFileManager {
     });
   }
 
+  /// 该方法看似只将缓冲区内容写入磁盘，实际上
+  /// 每当缓存写入后都会认为该[pieceIndex]对应`Piece`已经完成，则会去移除
+  /// `_file2pieceMap`中文件对应的piece index，当全部移除完毕，会抛出File Complete事件
+  void flushPiece(List<int> pieceIndices) async {
+    var files = <DownloadFile>{};
+    pieceIndices.forEach((pieceIndex) {
+      var fs = _piece2fileMap[pieceIndex];
+      if (fs == null || fs.isEmpty) return;
+      files.addAll(fs);
+    });
+    if (files == null || files.isEmpty) return;
+    var futures = <Future<bool>>[];
+    files?.forEach((file) {
+      futures.add(file.requestFlush());
+    });
+    await Stream.fromFutures(futures).toList();
+    var d = _stateFile.downloaded;
+    var msg =
+        '已写入磁盘：${d / (1024 * 1024)} mb , 完成度 ${((d / metainfo.length) * 10000).toInt() / 100} %';
+    log(msg);
+    files.forEach((file) {
+      var pieces = _file2pieceMap[file.filePath];
+      if (pieces != null && pieces.isNotEmpty) {
+        pieceIndices.forEach((index) {
+          pieces.remove(index);
+        });
+        if (pieces.isEmpty) {
+          _file2pieceMap[file.filePath] = null;
+          _fireFileComplete(file.filePath);
+        }
+      }
+    });
+  }
+
+  void onFileComplete(void Function(String) h) {
+    _fileCompleteHandles.add(h);
+  }
+
+  void offFileComplete(void Function(String) h) {
+    _fileCompleteHandles.remove(h);
+  }
+
+  void _fireFileComplete(String path) {
+    _fileCompleteHandles.forEach((element) {
+      Timer.run(() => element(path));
+    });
+  }
+
   void _initFileMap(String directory) {
     for (var i = 0; i < metainfo.files.length; i++) {
       var file = metainfo.files[i];
       var df = DownloadFile(directory + file.path, file.offset, file.length);
-      df.onFileDownloadCompleteHandle(_fileWriteComplete);
       var fs = df.start;
       var fe = df.end;
       var startPiece = fs ~/ metainfo.pieceLength;
       var endPiece = fe ~/ metainfo.pieceLength;
+      var pieces = _file2pieceMap[df.filePath];
+      if (pieces == null) {
+        pieces = <int>[];
+        _file2pieceMap[df.filePath] = pieces;
+      }
       if (fe.remainder(metainfo.pieceLength) == 0) endPiece--;
       for (var pieceIndex = startPiece; pieceIndex <= endPiece; pieceIndex++) {
         var l = _piece2fileMap[pieceIndex];
         if (l == null) {
           l = <DownloadFile>[];
           _piece2fileMap[pieceIndex] = l;
+          if (!localHave(pieceIndex)) pieces.add(pieceIndex);
         }
         l.add(df);
       }
     }
-  }
-
-  void _fileWriteComplete(String path) {
-    _fileWriteCompleteHandles.forEach((handle) {
-      Timer.run(() => handle(path));
-    });
-  }
-
-  void onFileWriteComplete(void Function(String path) handle) {
-    _fileWriteCompleteHandles.add(handle);
-  }
-
-  void offFileWriteComplete(void Function(String path) handle) {
-    _fileWriteCompleteHandles.remove(handle);
-  }
-
-  void onAllComplete(void Function() handle) {
-    _allCompleteHandles.add(handle);
-  }
-
-  void offAllComplete(void Function() handle) {
-    _allCompleteHandles.remove(handle);
   }
 
   void onSubPieceReadComplete(SubPieceReadHandle handle) {
@@ -148,6 +177,14 @@ class DownloadFileManager {
     _subPieceCompleteHandles.remove(handle);
   }
 
+  void onSubPieceWriteFailed(SubPieceCompleteHandle handle) {
+    _subPieceFailedHandles.add(handle);
+  }
+
+  void offSubPieceWriteFailed(SubPieceCompleteHandle handle) {
+    _subPieceFailedHandles.remove(handle);
+  }
+
   void readFile(int pieceIndex, int begin, int length) {
     var tempFiles = _piece2fileMap[pieceIndex];
     var ps = pieceIndex * metainfo.pieceLength + begin;
@@ -156,13 +193,12 @@ class DownloadFileManager {
     var futures = <Future>[];
     for (var i = 0; i < tempFiles.length; i++) {
       var tempFile = tempFiles[i];
-      var re = _mapTempFilePosition(ps, pe, length, tempFile);
+      var re = _mapDownloadFilePosition(ps, pe, length, tempFile);
       if (re == null) continue;
       var substart = re['begin'];
       var position = re['position'];
       var subend = re['end'];
-      futures
-          .add(tempFile.requestRead(position, subend - substart, pieceIndex));
+      futures.add(tempFile.requestRead(position, subend - substart));
     }
     Stream.fromFutures(futures).fold<List<int>>(<int>[], (previous, element) {
       if (element != null && element is List<int>) previous.addAll(element);
@@ -172,7 +208,8 @@ class DownloadFileManager {
   }
 
   ///
-  /// 将`Sub Piece`的内容写入文件中。
+  /// 将`Sub Piece`的内容写入文件中。完成后会发送 `sub piece complete`事件，
+  /// 如果失败，就会发送`sub piece failed`事件
   ///
   /// 该`Sub Piece`是来自于[pieceIndex]对应的`Piece`，内容为[block],起始位置是[begin]。
   /// 该类不会去验证写入的Sub Piece是否重复，重复内容直接覆盖之前内容
@@ -184,20 +221,26 @@ class DownloadFileManager {
     var futures = <Future>[];
     for (var i = 0; i < tempFiles.length; i++) {
       var tempFile = tempFiles[i];
-      var re = _mapTempFilePosition(ps, pe, block.length, tempFile);
+      var re = _mapDownloadFilePosition(ps, pe, block.length, tempFile);
       if (re == null) continue;
       var substart = re['begin'];
       var position = re['position'];
       var subend = re['end'];
-      futures.add(
-          tempFile.requestWrite(position, block, substart, subend, pieceIndex));
+      futures.add(tempFile.requestWrite(position, block, substart, subend));
     }
-    Stream.fromFutures(futures).toList().then(
-        (values) => _subPieceWriteComplete(pieceIndex, begin, block.length));
+    Stream.fromFutures(futures).fold<bool>(true, (p, a) {
+      return p && a;
+    }).then((result) {
+      if (result) {
+        _subPieceWriteComplete(pieceIndex, begin, block.length);
+      } else {
+        _subPieceWriteFailed(pieceIndex, begin, block.length);
+      }
+    });
     return;
   }
 
-  Map _mapTempFilePosition(
+  Map _mapDownloadFilePosition(
       int pieceStart, int pieceEnd, int length, DownloadFile tempFile) {
     var fs = tempFile.start;
     var fe = fs + tempFile.length;
@@ -223,15 +266,13 @@ class DownloadFileManager {
   Future<List> close() {
     var l = <Future>[];
     l.add(_stateFile?.close());
-    _piece2fileMap.forEach((key, value) {
-      value.forEach((DownloadFile downloadFile) {
+    _piece2fileMap.forEach((element) {
+      element.forEach((DownloadFile downloadFile) {
         l.add(downloadFile?.close());
       });
     });
-    _fileWriteCompleteHandles.clear();
     _subPieceCompleteHandles.clear();
     _subPieceReadHandles.clear();
-    _allCompleteHandles.clear();
     return Stream.fromFutures(l).toList();
   }
 
@@ -239,7 +280,7 @@ class DownloadFileManager {
     var l = <Future>[];
     l.add(close());
     _stateFile?.delete();
-    _piece2fileMap.forEach((key, value) {
+    _piece2fileMap.forEach((value) {
       value.forEach((DownloadFile downloadFile) {
         l.add(downloadFile?.delete());
       });

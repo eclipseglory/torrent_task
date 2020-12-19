@@ -13,15 +13,17 @@ class Bitfield {
   Bitfield(this.piecesNum, this.buffer);
 
   bool getBit(int index) {
-    if (index >= piecesNum) return false;
+    if (index < 0 || index >= piecesNum) return false;
     var i = index ~/ 8; // 表示第几个数字
     var b = index.remainder(8); // 这表示该数字的第几位bit
     var andNum = BASE_NUM >> b;
     return ((andNum & buffer[i]) != 0); // 等于0说明该位上的数字为0，即false
   }
 
+  ///
+  /// [index] 如果不在 [0 - piecesNum]范围内，不会报错，直接返回
   void setBit(int index, bool bit) {
-    if (index >= piecesNum) return;
+    if (index < 0 || index >= piecesNum) return;
     var i = index ~/ 8; // 表示第几个数字
     var b = index.remainder(8); // 这表示该数字的第几位bit
     var orNum = BASE_NUM >> b;
