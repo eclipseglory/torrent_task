@@ -202,6 +202,8 @@ abstract class Peer with PeerEventDispatcher {
   /// 本地发送给远程的Request请求
   List<List<int>> get requestBuffer => _requestBuffer;
 
+  Set<int> get remoteSuggestPieces => _remoteSuggestPieces;
+
   String get id => _id;
 
   bool get isDisposed => _disposed;
@@ -255,7 +257,6 @@ abstract class Peer with PeerEventDispatcher {
         _log('Error happen: $address');
         dispose(e);
       });
-      print('$_localPeerId port: ${(_stream as Socket).port}');
       fireConnectEvent();
     } catch (e) {
       return dispose(e);
@@ -550,6 +551,7 @@ abstract class Peer with PeerEventDispatcher {
   void _processRemoteRequest(List<int> message, [int offset = 1]) {
     if (_remoteRequestBuffer.length >= MAX_REQUEST_COUNT) {
       dispose('Too many requests from ${address}');
+      return;
     }
     var view = ByteData.view(Uint8List.fromList(message).buffer);
     var index = view.getUint32(offset);
@@ -763,7 +765,6 @@ abstract class Peer with PeerEventDispatcher {
     view.setUint32(0, index, Endian.big);
     view.setUint32(4, begin, Endian.big);
     view.setUint32(8, length, Endian.big);
-    // print('send ($index,$begin) request to $address');
     sendMessage(ID_REQUEST, bytes);
     return true;
   }
@@ -948,13 +949,13 @@ abstract class Peer with PeerEventDispatcher {
 
   /// 开始倒计时。
   ///
-  /// Over 2 minutes , peer will close to disconnect remote.
-  /// but if peer send any message or receive any message from remote during countdown,
+  /// Over `countdownTime` seconds , peer will close to disconnect the remote.
+  /// but if peer send or receive any message from/to remote during countdown,
   /// it will re-countdown.
   void _startToCountdown() {
     _countdownTimer?.cancel();
     _countdownTimer = Timer(Duration(seconds: countdownTime), () {
-      dispose(TimeoutException());
+      dispose('Over ${countdownTime} seconds no communication, close');
     });
   }
 
@@ -967,6 +968,7 @@ abstract class Peer with PeerEventDispatcher {
     _disposeReason = reason;
     _disposed = true;
     _handShaked = false;
+    _bitfieldSended = false;
     fireDisposeEvent(reason);
     clearEventHandles();
     var re = _streamChunk?.cancel();

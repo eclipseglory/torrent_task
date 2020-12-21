@@ -82,6 +82,7 @@ class StateFile {
     _access = await getAccess();
     var completer = Completer<bool>();
     _sc.add({
+      'type': 'single',
       'index': index,
       'uploaded': uploaded,
       'have': have,
@@ -90,22 +91,72 @@ class StateFile {
     return completer.future;
   }
 
+  Future<bool> updateAll(List<int> indices,
+      {List<bool> have, int uploaded = 0}) async {
+    _access = await getAccess();
+    var completer = Completer<bool>();
+    _sc.add({
+      'type': 'all',
+      'indices': indices,
+      'uploaded': uploaded,
+      'have': have,
+      'completer': completer
+    });
+    return completer.future;
+  }
+
+  Future<void> _updateAll(event) async {
+    List<int> indices = event['indices'];
+    int uploaded = event['uploaded'];
+    List<bool> haves = event['have'];
+    Completer c = event['completer'];
+    for (var i = 0; i < indices.length; i++) {
+      if (haves == null) {
+        _bitfield.setBit(indices[i], true);
+      } else {
+        _bitfield.setBit(indices[i], haves[i]);
+      }
+    }
+    _uploaded = uploaded;
+    try {
+      var access = await getAccess();
+      await access.setPosition(0);
+      await access.writeFrom(_bitfield.buffer);
+      await access.setPosition(_bitfield.buffer.length);
+      var data = Uint8List(8);
+      var d = ByteData.view(data.buffer);
+      d.setUint64(0, uploaded);
+      access = await access.writeFrom(data);
+      await access.flush();
+      c.complete(true);
+    } catch (e) {
+      c.complete(false);
+    }
+    return;
+  }
+
   Future<void> _update(event) async {
     int index = event['index'];
     int uploaded = event['uploaded'];
     bool have = event['have'];
     Completer c = event['completer'];
-    if (_bitfield.getBit(index) == have && _uploaded == uploaded) {
-      c.complete(false);
-      return;
+    if (index != -1) {
+      if (_bitfield.getBit(index) == have && _uploaded == uploaded) {
+        c.complete(false);
+        return;
+      }
+      _bitfield.setBit(index, have);
+    } else {
+      if (_uploaded == uploaded) return false;
     }
-    _bitfield.setBit(index, have);
     _uploaded = uploaded;
     try {
       var access = await getAccess();
-      var i = index ~/ 8;
-      await access.setPosition(i);
-      await access.writeByte(_bitfield.buffer[i]);
+      if (index != -1) {
+        var i = index ~/ 8;
+        await access.setPosition(i);
+        await access.writeByte(_bitfield.buffer[i]);
+      }
       await access.setPosition(_bitfield.buffer.length);
       var data = Uint8List(8);
       var d = ByteData.view(data.buffer);
@@ -126,6 +177,10 @@ class StateFile {
     return update(index, have: have, uploaded: _uploaded);
   }
 
+  // Future<bool> updateBitfields(List<int> indices, [List<bool> haves]) async {
+  //   return updateAll(indices, have: haves, uploaded: _uploaded);
+  // }
+
   Future<bool> updateUploaded(int uploaded) async {
     if (_uploaded == uploaded) return false;
     return update(-1, uploaded: uploaded);
@@ -133,7 +188,12 @@ class StateFile {
 
   void _processRequest(event) async {
     _ss.pause();
-    await _update(event);
+    // if (event['type'] == 'all') {
+    //   await _updateAll(event);
+    // }
+    if (event['type'] == 'single') {
+      await _update(event);
+    }
     _ss.resume();
   }
 

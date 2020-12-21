@@ -10,6 +10,8 @@ import 'piece_selector.dart';
 typedef PieceCompleteHandle = void Function(int pieceIndex);
 
 class PieceManager implements PieceProvider {
+  bool _isFirst = true;
+
   List<Piece> _pieces;
 
   // final Set<int> _completedPieces = <int>{};
@@ -70,10 +72,20 @@ class PieceManager implements PieceProvider {
     }
   }
 
-  Piece selectPiece(
-      String remotePeerId, List<int> remoteHavePieces, PieceProvider provider) {
+  Piece selectPiece(String remotePeerId, List<int> remoteHavePieces,
+      PieceProvider provider, final Set<int> suggestPieces) {
     // 查看当前下载piece中是否可以使用该peer
     var avalidatePiece = <int>[];
+    // 优先下载Suggest Pieces
+    if (suggestPieces != null && suggestPieces.isNotEmpty) {
+      for (var i = 0; i < suggestPieces.length; i++) {
+        var p = _pieces[suggestPieces.elementAt(i)];
+        if (p != null && p.haveAvalidateSubPiece()) {
+          processDownloadingPiece(remotePeerId, p.index, remoteHavePieces);
+          return p;
+        }
+      }
+    }
     var candidatePieces = remoteHavePieces;
     for (var i = 0; i < _donwloadingPieces.length; i++) {
       var p = _pieces[_donwloadingPieces.elementAt(i)];
@@ -87,22 +99,15 @@ class PieceManager implements PieceProvider {
     if (avalidatePiece.isNotEmpty) {
       candidatePieces = avalidatePiece;
     }
-    var fitPieces =
-        _pieceSelector.selectPiece(remotePeerId, candidatePieces, this);
-    if (fitPieces.isEmpty) return null;
-    var piece = fitPieces[randomInt(fitPieces.length)];
-    _processDonwloadingPiece(remotePeerId, piece.index, remoteHavePieces);
-    // log('随机使用：${piece.index}，当前下载中的piece 有：', name: 'PieceManager');
-    // _donwloadingPieces.forEach((element) {
-    //   var p = _pieces[element];
-    //   if (p != null) {
-    //     log(' - ${p.index}[${p.avalidateSubPieceCount}]');
-    //   }
-    // });
+    var piece = _pieceSelector.selectPiece(
+        remotePeerId, candidatePieces, this, _isFirst);
+    _isFirst = false;
+    if (piece == null) return null;
+    processDownloadingPiece(remotePeerId, piece.index, remoteHavePieces);
     return piece;
   }
 
-  void _processDonwloadingPiece(
+  void processDownloadingPiece(
       String peerId, int pieceIndex, List<int> remoteHavePieces) {
     // 该peer被占用，修改其他piece的avalidate peer
     remoteHavePieces.forEach((index) {
@@ -137,9 +142,6 @@ class PieceManager implements PieceProvider {
     // **NOTE** 没有可下载子piece并不一定就完成了，可能有一些在下载中
     if (piece.isCompleted) {
       _processCompletePiece(pieceIndex);
-      // log('Piece $pieceIndex 完全写入磁盘系统中');
-    } else {
-      // log('Piece $pieceIndex 下载中：${piece.subPiecesCount - piece.avalidateSubPieceCount - piece.downloadedSubPiecesCount - piece.writtingSubPiecesCount} , 已完成: ${piece.downloadedSubPiecesCount} , 写入中：${piece.writtingSubPiecesCount}');
     }
     return -1;
   }

@@ -48,13 +48,13 @@ void main() {
       }
       var indexList = randomIndex.toList();
       indexList.sort((a, b) => a - b);
-      print('check toString...:');
 
       var list = bitfield.completedPieces;
       print('Check completed index list...');
-      for (var i = 0; i < indexList.length; i++) {
-        assert(indexList[i] == list[i]);
+      for (var i = 0; i < list.length; i++) {
+        indexList.remove(list[i]);
       }
+      assert(indexList.isEmpty);
 
       assert(bitfield.haveCompletePiece());
       print('Check bitfield value...');
@@ -103,14 +103,14 @@ void main() {
   });
 
   group('Piece test - ', () {
-    test('create sub-pieces', () {
+    test('create sub-pieces', () async {
       // 能整除的
       var totalsize = 163840;
       var remain = Random().nextInt(100);
       totalsize = totalsize + remain;
       var p = Piece('aaaaaaa', 0, totalsize);
       var size = DEFAULT_REQUEST_LENGTH;
-      var subIndex = p.popSubPiece();
+      var subIndex = await p.popSubPiece();
       subIndex = p.popLastSubPiece();
       var begin = subIndex * size;
       if ((begin + size) > p.byteLength) {
@@ -206,7 +206,7 @@ void main() {
       assert(stateFile.uploaded == 987654321);
 
       await stateFile.close();
-      // await stateFile.close(); //关闭两次会怎样？
+      await stateFile.close(); //关闭两次会怎样？
       var f = File('$directory/${torrent.infoHash}.bt.state');
       var locker = Completer();
       var data = <int>[];

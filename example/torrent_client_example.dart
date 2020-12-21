@@ -5,10 +5,9 @@ import 'package:torrent_model/torrent_model.dart';
 
 var peers = <Uri>{};
 void main() async {
-  var model = await Torrent.parse('example/test8.torrent');
+  var model = await Torrent.parse('example/test5.torrent');
   var task = TorrentTask.newTask(model, 'g:/bttest/');
-  print(await task.start());
-  // print(await task.tracker.complete());
+  await task.start();
 
   Timer.periodic(Duration(seconds: 10), (timer) async {
     print(

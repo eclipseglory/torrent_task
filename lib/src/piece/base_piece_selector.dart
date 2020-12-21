@@ -1,3 +1,5 @@
+import 'package:torrent_client/src/utils.dart';
+
 import 'piece.dart';
 import 'piece_provider.dart';
 import 'piece_selector.dart';
@@ -11,8 +13,10 @@ import 'piece_selector.dart';
 /// - 在可用`Peer`数量都相同的情况下，选用`Sub Piece`数量最少的
 class BasePieceSelector implements PieceSelector {
   @override
-  List<Piece> selectPiece(
-      String remotePeerId, List<int> piecesIndexList, PieceProvider provider) {
+  Piece selectPiece(
+      String remotePeerId, List<int> piecesIndexList, PieceProvider provider,
+      [bool random = false]) {
+    // random = true;
     var maxList = <Piece>[];
     var a;
     var startIndex;
@@ -24,13 +28,16 @@ class BasePieceSelector implements PieceSelector {
         break;
       }
     }
-    if (startIndex == null) return maxList;
+    if (startIndex == null) return null;
+    maxList.add(a);
     for (var i = startIndex; i < piecesIndexList.length; i++) {
       var p = provider[piecesIndexList[i]];
       if (p == null || !p.haveAvalidateSubPiece() || !p.haveAvalidatePeers()) {
         continue;
       }
-      if (a.avalidatePeersCount < p.avalidatePeersCount) {
+      // 选择稀有piece
+      if (a.avalidatePeersCount > p.avalidatePeersCount) {
+        if (!random) return p;
         maxList.clear();
         a = p;
         maxList.add(a);
@@ -38,11 +45,13 @@ class BasePieceSelector implements PieceSelector {
         if (a.avalidatePeersCount == p.avalidatePeersCount) {
           // 如果同样数量可用下载peer的piece所具有的sub piece少，优先处理
           if (p.avalidateSubPieceCount < a.avalidateSubPieceCount) {
+            if (!random) return p;
             maxList.clear();
             a = p;
             maxList.add(a);
           } else {
             if (p.avalidateSubPieceCount == a.avalidateSubPieceCount) {
+              if (!random) return p;
               maxList.add(p);
               a = p;
             }
@@ -50,6 +59,9 @@ class BasePieceSelector implements PieceSelector {
         }
       }
     }
-    return maxList;
+    if (random) {
+      return maxList[randomInt(maxList.length)];
+    }
+    return a;
   }
 }

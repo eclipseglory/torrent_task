@@ -1,3 +1,4 @@
+import 'dart:developer';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -13,6 +14,9 @@ import 'piece/base_piece_selector.dart';
 import 'piece/piece_manager.dart';
 import 'peer/peers_manager.dart';
 
+const MAX_PEERS = 50;
+const MAX_IN_PEERS = 10;
+
 abstract class TorrentTask {
   factory TorrentTask.newTask(Torrent metaInfo, String savePath) {
     return _TorrentTask(metaInfo, savePath);
@@ -23,7 +27,9 @@ abstract class TorrentTask {
 
   Future start();
 
-  void stop();
+  Future stop();
+
+  Future complete();
 
   void pause();
 
@@ -31,6 +37,7 @@ abstract class TorrentTask {
 
   void delete();
 
+  @Deprecated('This method is just for debug')
   void addPeer(Uri host, Uri peer);
 
   TorrentAnnounceTracker get tracker;
@@ -38,6 +45,8 @@ abstract class TorrentTask {
 
 class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   TorrentAnnounceTracker _tracker;
+
+  bool _trackerRunning = false;
 
   StateFile _stateFile;
 
@@ -51,7 +60,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   final String _savePath;
 
-  final Set<String> _peers = {};
+  final Set<String> _peerIds = {};
 
   String _peerId;
 
@@ -64,6 +73,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   int _startDownloaded = 0;
 
   int _startUploaded = 0;
+
+  final Set<String> _cominIp = {};
 
   _TorrentTask(this._metaInfo, this._savePath) {
     _peerId = generatePeerId();
@@ -96,7 +107,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         BasePieceSelector(), model, _stateFile.bitfield);
     _fileManager ??= await DownloadFileManager.createFileManager(
         model, savePath, _stateFile);
-    _peersManager ??= PeersManager(_pieceManager, _pieceManager, _fileManager);
+    _peersManager ??=
+        PeersManager(_pieceManager, _pieceManager, _fileManager, model);
     return _peersManager;
   }
 
@@ -130,36 +142,63 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   void _whenTrackerOverOneturn(int totalTrackers) {
-    _peers.clear();
+    print('all tracker over');
+    _trackerRunning = false;
+    _peerIds.clear();
   }
 
-  void _hookCommunicator(Tracker source, PeerEvent event) {
+  void _whenNoActivePeers() {
+    if (_fileManager.isAllComplete) return;
+    if (!_trackerRunning) {
+      _trackerRunning = true;
+      _tracker.restart();
+    }
+  }
+
+  void _hookOutPeer(Tracker source, PeerEvent event) {
     var ps = event.peers;
     var piecesNum = _metaInfo.pieces.length;
     if (ps != null && ps.isNotEmpty) {
       ps.forEach((url) {
-        var id = 'TCP:${url.host}:${url.port}';
-        if (_peers.contains(id)) return;
-        print('Try to connect peer : $id');
-        _peers.add(id);
+        var id = 'Out:${url.host}:${url.port}';
+        if (_peerIds.contains(id)) return;
+        _peerIds.add(id);
         var p = TCPPeer(id, _peerId, url, _infoHashBuffer, piecesNum);
-        _peersManager.hookPeer(p);
+        _connectPeer(p);
       });
     }
   }
 
-  void _hookComeinPeer(Socket socket) {
-    var id = 'TCP:${socket.address.host}:${socket.port}';
-    print('New come in peer : $id');
-    var piecesNum = _metaInfo.pieces.length;
-    var p = TCPPeer(
-        id,
-        _peerId,
-        Uri(host: socket.address.host, port: socket.port),
-        _infoHashBuffer,
-        piecesNum,
-        socket);
+  void _connectPeer(Peer p) {
+    if (p == null) return;
+    p.onDispose((source, [reason]) {
+      var peer = source as Peer;
+      var host = peer.address.host;
+      _cominIp.remove(host);
+    });
     _peersManager.hookPeer(p);
+  }
+
+  void _hookInPeer(Socket socket) {
+    var id = 'In:${socket.address.host}:${socket.port}';
+    if (_cominIp.length >= MAX_IN_PEERS) {
+      socket.close();
+      return;
+    }
+    if (_cominIp.add(socket.address.host)) {
+      log('New come in peer : $id', name: runtimeType.toString());
+      var piecesNum = _metaInfo.pieces.length;
+      var p = TCPPeer(
+          id,
+          _peerId,
+          Uri(host: socket.address.host, port: socket.port),
+          _infoHashBuffer,
+          piecesNum,
+          socket);
+      _connectPeer(p);
+    } else {
+      socket.close();
+    }
   }
 
   @override
@@ -187,10 +226,10 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _startTime = DateTime.now().millisecondsSinceEpoch;
     // 进入的peer：
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
-    _serverSocket.listen(_hookComeinPeer);
     await init(_metaInfo, _savePath);
+    _serverSocket.listen(_hookInPeer);
 
-    print('开始下载：${_metaInfo.name}');
+    print('开始下载：${_metaInfo.name} , ${_serverSocket.port}');
     print(
         '已经下载${_stateFile.bitfield.completedPieces.length}个片段，共有${_stateFile.bitfield.piecesNum}个片段');
     print('下载:${_stateFile.downloaded / (1024 * 1024)} mb');
@@ -198,26 +237,73 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     print(
         '剩余:${(_metaInfo.length - _stateFile.downloaded) / (1024 * 1024)} mb');
     // 主动访问的peer:
-    _tracker.onPeerEvent(_hookCommunicator);
+    _tracker.onPeerEvent(_hookOutPeer);
     _tracker.onAllAnnounceOver(_whenTrackerOverOneturn);
     _peersManager.onAllComplete(_whenTaskDownloadComplete);
+    _peersManager.onNoActivePeerEvent(_whenNoActivePeers);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
-    _tracker.start(true);
-    return Uri(host: _serverSocket.address.address, port: _serverSocket.port);
+
+    if (_fileManager.localBitfield.completedPieces.length ==
+        _fileManager.localBitfield.piecesNum) {
+      try {
+        return _tracker.complete();
+      } catch (e) {
+        log('Try to complete tracker error :',
+            error: e, name: runtimeType.toString());
+        return dispose();
+      }
+    } else {
+      try {
+        _trackerRunning = true;
+        return _tracker.start(true);
+      } catch (e) {
+        log('Try to start tracker error :',
+            error: e, name: runtimeType.toString());
+        return dispose();
+      }
+    }
   }
 
   @override
-  void stop([bool force = false]) {
-    // _tracker?.stop(force);
-    // _fileManager?.close();
+  Future stop([bool force = false]) async {
+    await _tracker?.stop(force);
+    return dispose();
+  }
+
+  Future dispose() async {
+    var l = <Future>[];
+    _tracker.offPeerEvent(_hookOutPeer);
+    _tracker.offAllAnnounceOver(_whenTrackerOverOneturn);
+    _peersManager.offAllComplete(_whenTaskDownloadComplete);
+    _fileManager.offFileComplete(_whenFileDownloadComplete);
+    l.add(_tracker?.dispose());
+    _tracker = null;
+    l.add(_peersManager?.dispose());
+    _peersManager = null;
+    l.add(_fileManager?.close());
+    _fileManager = null;
+
+    _peerIds.clear();
+
+    l.add(_serverSocket?.close());
+    _serverSocket = null;
+    _startTime = -1;
+    _cominIp.clear();
+    return Stream.fromFutures(l).toList();
+  }
+
+  @override
+  Future complete() {
+    // TODO: implement complete
+    throw UnimplementedError();
   }
 
   @override
   Future<Map<String, dynamic>> getOptions(Uri uri, String infoHash) {
     var map = {
-      'downloaded': 0, //await _stateFile?.downloaded,
+      'downloaded': _stateFile?.downloaded,
       'uploaded': _stateFile?.uploaded,
-      'left': _metaInfo.length, //- await _stateFile.downloaded,
+      'left': _metaInfo.length - _stateFile.downloaded,
       'numwant': 50,
       'compact': 1,
       'peerId': _peerId,
@@ -227,6 +313,5 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  // TODO: implement tracker
   TorrentAnnounceTracker get tracker => _tracker;
 }

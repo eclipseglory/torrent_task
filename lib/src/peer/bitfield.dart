@@ -24,25 +24,24 @@ class Bitfield {
   /// [index] 如果不在 [0 - piecesNum]范围内，不会报错，直接返回
   void setBit(int index, bool bit) {
     if (index < 0 || index >= piecesNum) return;
+    if (getBit(index) == bit) return;
     var i = index ~/ 8; // 表示第几个数字
     var b = index.remainder(8); // 这表示该数字的第几位bit
     var orNum = BASE_NUM >> b;
     if (bit) {
       _completedIndex = completedPieces;
       _completedIndex.add(index);
-      var j = _completedIndex.length - 1;
-      for (; j > 0; j--) {
-        if (_completedIndex[j - 1] > _completedIndex[j]) {
-          var temp = _completedIndex[j];
-          _completedIndex[j] = _completedIndex[j - 1];
-          _completedIndex[j - 1] = temp;
-        } else {
-          if (_completedIndex[j - 1] == _completedIndex[j]) {
-            _completedIndex.removeAt(j);
-          }
-          break;
-        }
-      }
+      // TODO 好像没有排序必要 ??
+      // _completedIndex.sort((a, b) => a - b);
+      //
+      // var j = _completedIndex.length - 1;
+      // for (; j > 0; j--) {
+      //   if (_completedIndex[j - 1] > _completedIndex[j]) {
+      //     var temp = _completedIndex[j];
+      //     _completedIndex[j] = _completedIndex[j - 1];
+      //     _completedIndex[j - 1] = temp;
+      //   }
+      // }
       buffer[i] = buffer[i] | orNum;
     } else {
       _completedIndex?.remove(index);

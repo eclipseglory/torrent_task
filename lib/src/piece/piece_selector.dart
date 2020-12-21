@@ -12,6 +12,7 @@ abstract class PieceSelector {
   /// 该方法通过[provider]以及[piecesIndexList]获取对应的`Piece`对象，并在[piecesIndexList]
   /// 集合中进行筛选。
   ///
-  List<Piece> selectPiece(
-      String remotePeerId, List<int> piecesIndexList, PieceProvider provider);
+  Piece selectPiece(
+      String remotePeerId, List<int> piecesIndexList, PieceProvider provider,
+      [bool first = false]);
 }

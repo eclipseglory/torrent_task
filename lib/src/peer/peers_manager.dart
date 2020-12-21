@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:developer';
 
+import 'package:torrent_model/torrent_model.dart';
+
 import 'bitfield.dart';
 import 'peer.dart';
 import '../file/download_file_manager.dart';
@@ -11,19 +13,30 @@ import '../utils.dart';
 
 const MAX_ACTIVE_PEERS = 50;
 
+const MAX_WRITE_BUFFER_SIZE = 10 * 1024 * 1024;
+
 const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 
 ///
 /// TODO:
-/// - 没有处理Suggest Piece
+/// - 没有处理对外的Suggest Piece/Fast Allow
 class PeersManager {
   final Set<Peer> interestedPeers = {};
   final Set<Peer> notInterestedPeers = {};
   final Set<Peer> noResponsePeers = {};
 
+  /// 写入磁盘的缓存最大值
+  int maxWriteBufferSize;
+
+  final _flushIndicesBuffer = <int>{};
+
   final Set<void Function()> _allcompletehandles = {};
 
+  final Set<void Function()> _noActivePeerhandles = {};
+
   final List<List<int>> _timeoutRequest = [];
+
+  final Torrent _metaInfo;
 
   int _uploaded = 0;
 
@@ -37,22 +50,22 @@ class PeersManager {
 
   final PieceManager _pieceManager;
 
-  final _flushStream = StreamController<List<int>>();
+  final _flushStream = StreamController<Set<int>>();
 
   final _flushBuffer = <int>{};
 
   StreamSubscription _flushStreamS;
 
-  Timer keepAliveTimer;
-
-  PeersManager(this._pieceManager, this._pieceProvider, this._fileManager) {
+  PeersManager(this._pieceManager, this._pieceProvider, this._fileManager,
+      this._metaInfo,
+      [this.maxWriteBufferSize = MAX_WRITE_BUFFER_SIZE]) {
     assert(_pieceManager != null &&
         _pieceProvider != null &&
         _fileManager != null);
     // hook FileManager and PieceManager
     _fileManager.onSubPieceWriteComplete(_processSubPieceWriteComplte);
-    _fileManager.onSubPieceReadComplete(readSubpieceComplete);
-    _pieceManager.onPieceComplete(_pieceWrittenComplete);
+    _fileManager.onSubPieceReadComplete(readSubPieceComplete);
+    _pieceManager.onPieceComplete(_processPieceWriteComplete);
   }
 
   void hookPeer(Peer peer) {
@@ -84,44 +97,40 @@ class PeersManager {
     _pieceManager.processSubPieceWriteComplete(pieceIndex, begin, length);
   }
 
-  void _pieceWrittenComplete(int index) async {
-    // 防止多次更新
+  void _processPieceWriteComplete(int index) async {
     if (_fileManager.localHave(index)) return;
-    // 先要更新完本地才去通知远程
-    var success = await _fileManager.updateBitfield(index);
-    if (!success) return;
-
+    await _fileManager.updateBitfield(index);
     interestedPeers.forEach((peer) {
       // if (!peer.remoteHave(index)) {
-      log('收到完整片段，通知 ${peer.address} : $index');
+      log('收到完整片段，通知 ${peer.address} : $index', name: runtimeType.toString());
       peer.sendHave(index);
       // }
     });
     notInterestedPeers.forEach((peer) {
       // if (!peer.remoteHave(index)) {
-      log('收到完整片段，通知 ${peer.address} : $index');
+      log('收到完整片段，通知 ${peer.address} : $index', name: runtimeType.toString());
       peer.sendHave(index);
       // }
     });
-    // TODO flush和写入以及下载速度不匹配，这导致会重复flush，
-    // 目前用一个buffer缓存需要flush的pieceindex，但问题没有彻底解决
-    _flushBuffer.add(index);
-    _flushStreamS ??= _flushStream.stream.listen((piecesIndieces) async {
-      _flushStreamS?.pause();
-      await _fileManager.flushPiece(piecesIndieces);
-      // 等到完全将缓冲区写入磁盘再验证是否全部成
-      if (_fileManager.localBitfield.completedPieces.length ==
-          _pieceManager.length) {
-        _fireAllComplete();
-      }
-      _flushStreamS?.resume();
-    });
-    if (!_flushStream.isPaused) {
-      if (_flushBuffer.isEmpty) return;
-      var temp = List<int>.from(_flushBuffer);
-      _flushBuffer.clear();
-      _flushStream.add(temp);
+    _flushIndicesBuffer.add(index);
+    if (_fileManager.isAllComplete) {
+      await _flushFiles(_flushIndicesBuffer);
+      _fireAllComplete();
+    } else {
+      await _flushFiles(_flushIndicesBuffer);
     }
+  }
+
+  Future _flushFiles(final Set<int> indices) async {
+    if (indices.isEmpty) return;
+    var piecesSize = _metaInfo.pieceLength;
+    var _buffer = indices.length * piecesSize;
+    if (_buffer >= maxWriteBufferSize || _fileManager.isAllComplete) {
+      var temp = Set<int>.from(indices);
+      indices.clear();
+      await _fileManager.flushFiles(temp);
+    }
+    return;
   }
 
   void _fireAllComplete() {
@@ -149,7 +158,7 @@ class PeersManager {
   //   }
   // }
 
-  void readSubpieceComplete(int pieceIndex, int begin, List<int> block) {
+  void readSubPieceComplete(int pieceIndex, int begin, List<int> block) {
     var dindex = [];
     for (var i = 0; i < _remoteRequest.length; i++) {
       var request = _remoteRequest[i];
@@ -180,11 +189,14 @@ class PeersManager {
   void _processAllowFast(dynamic source, int index) {
     var peer = source as Peer;
     var piece = _pieceProvider[index];
-    if (piece != null) {
-      piece.addAvalidatePeer(peer.id);
+    if (piece != null && piece.haveAvalidateSubPiece()) {
+      _pieceManager.processDownloadingPiece(
+          peer.id, index, peer.remoteBitfield.completedPieces);
+      _requestPieces(source, index);
     }
-    if (piece.haveAvalidateSubPiece()) _requestPieces(source, index);
   }
+
+  void _processSuggestPiece(dynamic source, int index) {}
 
   void _processRejectRequest(dynamic source, int index, int begin, int length) {
     var piece = _pieceProvider[index];
@@ -214,6 +226,23 @@ class PeersManager {
     notInterestedPeers.remove(peer);
     noResponsePeers.remove(peer);
     log('目前还有 ${interestedPeers.length}个活跃节点. ');
+    if (interestedPeers.isEmpty) {
+      _fireNoActivePeer();
+    }
+  }
+
+  bool onNoActivePeerEvent(Function k) {
+    return _noActivePeerhandles.add(k);
+  }
+
+  bool offNoActivePeerEvent(Function k) {
+    return _noActivePeerhandles.remove(k);
+  }
+
+  void _fireNoActivePeer() {
+    _noActivePeerhandles.forEach((element) {
+      Timer.run(() => element());
+    });
   }
 
   void _peerConnected(dynamic source) {
@@ -229,8 +258,8 @@ class PeersManager {
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
     } else {
-      piece = _pieceManager.selectPiece(
-          peer.id, peer.remoteCompletePieces, _pieceProvider);
+      piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
+          _pieceProvider, peer.remoteSuggestPieces);
     }
     if (piece == null) {
       if (_timeoutRequest.isNotEmpty) {
@@ -248,6 +277,7 @@ class PeersManager {
     if ((begin + size) > piece.byteLength) {
       size = piece.byteLength - begin;
     }
+
     if (!peer.sendRequest(piece.index, begin, size)) {
       piece.pushSubPiece(subIndex);
     }
@@ -277,7 +307,6 @@ class PeersManager {
 
   void _processPeerHandshake(dynamic source, String remotePeerId, data) {
     var peer = source as Peer;
-    print('handshake ${peer.address}:$remotePeerId');
     noResponsePeers.remove(peer);
     notInterestedPeers.add(peer);
     peer.sendBitfield(_fileManager.localBitfield);
@@ -291,7 +320,6 @@ class PeersManager {
 
   void _processBitfieldUpdate(dynamic source, Bitfield bitfield) {
     var peer = source as Peer;
-    log('bitfield updated : ${peer.address}');
     if (bitfield != null) {
       if (peer.interestedRemote) return;
       for (var i = 0; i < _fileManager.piecesNumber; i++) {
@@ -356,12 +384,9 @@ class PeersManager {
     _addTimeoutRequest(index, begin, length);
     log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
         name: runtimeType.toString());
-    if (_pieceProvider[index] != null) {
-      if (_pieceProvider[index].haveAvalidateSubPiece()) {
-        _requestPieces(peer, index);
-      } else {
-        _requestPieces(peer);
-      }
+    if (_pieceProvider[index] != null &&
+        _pieceProvider[index].haveAvalidateSubPiece()) {
+      _requestPieces(peer, index);
     } else {
       _requestPieces(peer);
     }
@@ -395,8 +420,30 @@ class PeersManager {
     return false;
   }
 
-  void stop() {
-    // TODO implement it
-    // keepAliveTimer?.cancel();
+  Future dispose() async {
+    var l = <Future>[];
+    _fileManager.offSubPieceWriteComplete(_processSubPieceWriteComplte);
+    _fileManager.offSubPieceReadComplete(readSubPieceComplete);
+    _pieceManager.offPieceComplete(_processPieceWriteComplete);
+
+    l.add(_flushStream?.close());
+    l.add(_flushStreamS.cancel());
+
+    // await _fileManager.flushPiece(_flushBuffer.toList());
+
+    _flushBuffer.clear();
+
+    interestedPeers.forEach((peer) {
+      l.add(peer.dispose('Peer Manager disposed'));
+    });
+    notInterestedPeers.forEach((peer) {
+      l.add(peer.dispose('Peer Manager disposed'));
+    });
+    noResponsePeers.forEach((peer) {
+      l.add(peer.dispose('Peer Manager disposed'));
+    });
+    _timeoutRequest.clear();
+
+    return Stream.fromFutures(l).toList();
   }
 }

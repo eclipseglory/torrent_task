@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:developer';
-import 'dart:math' as math;
 
 import 'package:torrent_client/src/peer/bitfield.dart';
 import 'package:torrent_model/torrent_model.dart';
@@ -59,6 +58,11 @@ class DownloadFileManager {
     return _stateFile.bitfield.getBit(index);
   }
 
+  bool get isAllComplete {
+    return _stateFile.bitfield.piecesNum ==
+        _stateFile.bitfield.completedPieces.length;
+  }
+
   int get piecesNumber => _stateFile.bitfield.piecesNum;
 
   void _subPieceWriteComplete(int pieceIndex, int begin, int length) {
@@ -77,6 +81,10 @@ class DownloadFileManager {
     return _stateFile.updateBitfield(index, have);
   }
 
+  // Future<bool> updateBitfields(List<int> indices, [List<bool> haves]) {
+  //   return _stateFile.updateBitfields(indices, haves);
+  // }
+
   Future<bool> updateUpload(int uploaded) {
     return _stateFile.updateUploaded(uploaded);
   }
@@ -90,35 +98,32 @@ class DownloadFileManager {
   /// 该方法看似只将缓冲区内容写入磁盘，实际上
   /// 每当缓存写入后都会认为该[pieceIndex]对应`Piece`已经完成，则会去移除
   /// `_file2pieceMap`中文件对应的piece index，当全部移除完毕，会抛出File Complete事件
-  void flushPiece(List<int> pieceIndices) async {
-    var files = <DownloadFile>{};
-    pieceIndices.forEach((pieceIndex) {
-      var fs = _piece2fileMap[pieceIndex];
-      if (fs == null || fs.isEmpty) return;
-      files.addAll(fs);
-    });
-    if (files == null || files.isEmpty) return;
-    var futures = <Future<bool>>[];
-    files?.forEach((file) {
-      futures.add(file.requestFlush());
-    });
-    await Stream.fromFutures(futures).toList();
+  Future<bool> flushFiles(Set<int> pieceIndices) async {
     var d = _stateFile.downloaded;
-    var msg =
-        '已写入磁盘：${d / (1024 * 1024)} mb , 完成度 ${((d / metainfo.length) * 10000).toInt() / 100} %';
-    log(msg);
-    files.forEach((file) {
-      var pieces = _file2pieceMap[file.filePath];
-      if (pieces != null && pieces.isNotEmpty) {
-        pieceIndices.forEach((index) {
-          pieces.remove(index);
-        });
-        if (pieces.isEmpty) {
+    var flushed = <String>{};
+    for (var i = 0; i < pieceIndices.length; i++) {
+      var pieceIndex = pieceIndices.elementAt(i);
+      var fs = _piece2fileMap[pieceIndex];
+      if (fs == null || fs.isEmpty) continue;
+      for (var i = 0; i < fs.length; i++) {
+        var file = fs[i];
+        var pieces = _file2pieceMap[file.filePath];
+        if (pieces == null) continue;
+        pieces.remove(pieceIndex);
+        if (flushed.add(file.filePath)) {
+          await file.requestFlush();
+        }
+        if (pieces.isEmpty && _file2pieceMap[file.filePath] != null) {
           _file2pieceMap[file.filePath] = null;
           _fireFileComplete(file.filePath);
         }
       }
-    });
+    }
+
+    var msg =
+        '已下载：${d / (1024 * 1024)} mb , 完成度 ${((d / metainfo.length) * 10000).toInt() / 100} %';
+    log(msg, name: runtimeType.toString());
+    return true;
   }
 
   void onFileComplete(void Function(String) h) {
@@ -272,7 +277,11 @@ class DownloadFileManager {
       });
     });
     _subPieceCompleteHandles.clear();
+    _subPieceFailedHandles.clear();
     _subPieceReadHandles.clear();
+    _fileCompleteHandles.clear();
+    _file2pieceMap.clear();
+    _piece2fileMap.clear();
     return Stream.fromFutures(l).toList();
   }
 
