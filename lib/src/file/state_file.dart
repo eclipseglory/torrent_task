@@ -17,6 +17,8 @@ const UPLOADED_TYPE = 'uploaded';
 class StateFile {
   Bitfield _bitfield;
 
+  bool _closed = false;
+
   int _uploaded = 0;
 
   final Torrent metainfo;
@@ -30,6 +32,8 @@ class StateFile {
   StreamSubscription _ss;
 
   StreamController _sc;
+
+  bool get isClosed => _closed;
 
   static Future<StateFile> getStateFile(
       String directoryPath, Torrent metainfo) async {
@@ -105,6 +109,7 @@ class StateFile {
     return completer.future;
   }
 
+  @Deprecated('dont use this method , I dont test it')
   Future<void> _updateAll(event) async {
     List<int> indices = event['indices'];
     int uploaded = event['uploaded'];
@@ -207,6 +212,8 @@ class StateFile {
   }
 
   Future<void> close() async {
+    if (isClosed) return;
+    _closed = true;
     try {
       await _ss?.cancel();
       await _sc?.close();
@@ -223,6 +230,8 @@ class StateFile {
 
   Future<FileSystemEntity> delete() async {
     await close();
-    return _bitfieldFile?.delete();
+    var r = _bitfieldFile?.delete();
+    _bitfieldFile = null;
+    return r;
   }
 }

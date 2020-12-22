@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:developer';
 
-import 'package:torrent_client/src/peer/bitfield.dart';
 import 'package:torrent_model/torrent_model.dart';
+import '../peer/peer_base.dart';
 
 import 'download_file.dart';
 import 'state_file.dart';
@@ -15,6 +15,8 @@ typedef SubPieceReadHandle = void Function(
 
 class DownloadFileManager {
   final Torrent metainfo;
+
+  final Set<DownloadFile> _files = {};
 
   List<List<DownloadFile>> _piece2fileMap;
 
@@ -95,6 +97,8 @@ class DownloadFileManager {
     });
   }
 
+  int get downloaded => _stateFile?.downloaded;
+
   /// 该方法看似只将缓冲区内容写入磁盘，实际上
   /// 每当缓存写入后都会认为该[pieceIndex]对应`Piece`已经完成，则会去移除
   /// `_file2pieceMap`中文件对应的piece index，当全部移除完毕，会抛出File Complete事件
@@ -144,6 +148,7 @@ class DownloadFileManager {
     for (var i = 0; i < metainfo.files.length; i++) {
       var file = metainfo.files[i];
       var df = DownloadFile(directory + file.path, file.offset, file.length);
+      _files.add(df);
       var fs = df.start;
       var fe = df.end;
       var startPiece = fs ~/ metainfo.pieceLength;
@@ -268,32 +273,30 @@ class DownloadFileManager {
     return {'position': position, 'begin': substart, 'end': subend};
   }
 
-  Future<List> close() {
-    var l = <Future>[];
-    l.add(_stateFile?.close());
-    _piece2fileMap.forEach((element) {
-      element.forEach((DownloadFile downloadFile) {
-        l.add(downloadFile?.close());
-      });
-    });
-    _subPieceCompleteHandles.clear();
-    _subPieceFailedHandles.clear();
-    _subPieceReadHandles.clear();
-    _fileCompleteHandles.clear();
-    _file2pieceMap.clear();
-    _piece2fileMap.clear();
-    return Stream.fromFutures(l).toList();
+  Future close() async {
+    await _stateFile?.close();
+    for (var i = 0; i < _files.length; i++) {
+      var file = _files.elementAt(i);
+      await file.close();
+    }
+    _clean();
   }
 
-  Future delete() {
-    var l = <Future>[];
-    l.add(close());
-    _stateFile?.delete();
-    _piece2fileMap.forEach((value) {
-      value.forEach((DownloadFile downloadFile) {
-        l.add(downloadFile?.delete());
-      });
-    });
-    return Stream.fromFutures(l).toList();
+  void _clean() {
+    _subPieceCompleteHandles?.clear();
+    _subPieceFailedHandles?.clear();
+    _subPieceReadHandles?.clear();
+    _fileCompleteHandles?.clear();
+    _file2pieceMap?.clear();
+    _piece2fileMap = null;
+  }
+
+  Future delete() async {
+    await _stateFile?.delete();
+    for (var i = 0; i < _files.length; i++) {
+      var file = _files.elementAt(i);
+      await file.delete();
+    }
+    _clean();
   }
 }

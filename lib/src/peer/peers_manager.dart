@@ -34,7 +34,7 @@ class PeersManager {
 
   final Set<void Function()> _noActivePeerhandles = {};
 
-  final List<List<int>> _timeoutRequest = [];
+  final List<List<dynamic>> _timeoutRequest = [];
 
   final Torrent _metaInfo;
 
@@ -44,17 +44,21 @@ class PeersManager {
 
   final List<List> _remoteRequest = [];
 
+  final Map<String, int> _remoteRequestCounts = {};
+
   final DownloadFileManager _fileManager;
 
   final PieceProvider _pieceProvider;
 
   final PieceManager _pieceManager;
 
-  final _flushStream = StreamController<Set<int>>();
+  bool _paused = false;
 
-  final _flushBuffer = <int>{};
+  Timer _keepAliveTimer;
 
-  StreamSubscription _flushStreamS;
+  final List _pausedRequest = [];
+
+  final Map<String, List> _pausedRemoteRequest = {};
 
   PeersManager(this._pieceManager, this._pieceProvider, this._fileManager,
       this._metaInfo,
@@ -68,12 +72,14 @@ class PeersManager {
     _pieceManager.onPieceComplete(_processPieceWriteComplete);
   }
 
+  bool get isPaused => _paused;
+
   void hookPeer(Peer peer) {
     if (_peerExsist(peer)) return;
     peer.onDispose(_processPeerDispose);
     peer.onBitfield(_processBitfieldUpdate);
-    peer.onHaveAll((peer) => _processBitfieldUpdate(peer, peer.remoteBitfield));
-    peer.onHaveNone((peer) => _processBitfieldUpdate(peer, null));
+    peer.onHaveAll(_processHaveAll);
+    peer.onHaveNone(_processHaveNone);
     peer.onHandShake(_processPeerHandshake);
     peer.onChokeChange(_processChokeChange);
     peer.onInterestedChange(_processInterestedChange);
@@ -85,6 +91,24 @@ class PeersManager {
     peer.onRejectRequest(_processRejectRequest);
     peer.onAllowFast(_processAllowFast);
     peer.connect();
+  }
+
+  void unHookPeer(Peer peer) {
+    if (peer == null) return;
+    peer.offDispose(_processPeerDispose);
+    peer.offBitfield(_processBitfieldUpdate);
+    peer.offHaveAll(_processHaveAll);
+    peer.offHaveNone(_processHaveNone);
+    peer.offHandShake(_processPeerHandshake);
+    peer.offChokeChange(_processChokeChange);
+    peer.offInterestedChange(_processInterestedChange);
+    peer.offConnect(_peerConnected);
+    peer.offHave(_processHaveUpdate);
+    peer.offPiece(_processReceivePiece);
+    peer.offRequest(_processRemoteRequest);
+    peer.offRequestTimeout(_processRequestTimeout);
+    peer.offRejectRequest(_processRejectRequest);
+    peer.offAllowFast(_processAllowFast);
   }
 
   bool _peerExsist(Peer id) {
@@ -147,17 +171,6 @@ class PeersManager {
     return _allcompletehandles.remove(h);
   }
 
-  // void _sendKeepAliveToNotInterseted() {
-  //   if (notInterestedPeers.isEmpty) return;
-
-  //   var length = MAX_ACTIVE_PEERS - interestedPeers.length;
-  //   for (var i = 0; i < length; i++) {
-  //     var index = randomInt(notInterestedPeers.length);
-  //     var p = notInterestedPeers.elementAt(index);
-  //     p?.sendKeeplive();
-  //   }
-  // }
-
   void readSubPieceComplete(int pieceIndex, int begin, List<int> block) {
     var dindex = [];
     for (var i = 0; i < _remoteRequest.length; i++) {
@@ -165,6 +178,7 @@ class PeersManager {
       if (request[0] == pieceIndex && request[1] == begin) {
         dindex.add(i);
         var peer = request[2] as Peer;
+        _remoteRequestCounts[peer.id]--;
         if (peer != null && !peer.isDisposed) {
           if (peer.sendPiece(pieceIndex, begin, block)) {
             _uploaded += block.length;
@@ -225,6 +239,18 @@ class PeersManager {
     interestedPeers.remove(peer);
     notInterestedPeers.remove(peer);
     noResponsePeers.remove(peer);
+    _pausedRemoteRequest.remove(peer.id);
+    _remoteRequestCounts.remove(peer.id);
+    var tempIndex = [];
+    for (var i = 0; i < _pausedRequest.length; i++) {
+      var pr = _pausedRequest[i];
+      if (pr[0] == peer) {
+        tempIndex.add(i);
+      }
+    }
+    tempIndex.forEach((index) {
+      _pausedRequest.removeAt(index);
+    });
     log('目前还有 ${interestedPeers.length}个活跃节点. ');
     if (interestedPeers.isEmpty) {
       _fireNoActivePeer();
@@ -253,6 +279,10 @@ class PeersManager {
   }
 
   void _requestPieces(dynamic source, [int pieceIndex = -1]) {
+    if (isPaused) {
+      _pausedRequest.add([source, pieceIndex]);
+      return;
+    }
     var peer = source as Peer;
     Piece piece;
     if (pieceIndex != -1) {
@@ -265,6 +295,10 @@ class PeersManager {
       if (_timeoutRequest.isNotEmpty) {
         // 如果已经没有可以请求的piece，看看超时piece
         var timeoutR = _timeoutRequest.removeAt(0);
+        var p = timeoutR[3] as Peer;
+        if (p != null) {
+          p.removeRequest(timeoutR[0], timeoutR[1], timeoutR[2]);
+        }
         if (!peer.sendRequest(timeoutR[0], timeoutR[1], timeoutR[2])) {
           _timeoutRequest.insert(0, timeoutR);
         }
@@ -283,8 +317,8 @@ class PeersManager {
     }
   }
 
-  void _processReceivePiece(dynamic source, int index, int begin,
-      List<int> block, bool afterTimeout) {
+  void _processReceivePiece(
+      dynamic source, int index, int begin, List<int> block) {
     var peer = source as Peer;
     var rindex = -1;
     for (var i = 0; i < _timeoutRequest.length; i++) {
@@ -297,7 +331,11 @@ class PeersManager {
       }
     }
     if (rindex != -1) {
-      _timeoutRequest.removeAt(rindex);
+      var tr = _timeoutRequest.removeAt(rindex);
+      var peer = tr[3] as Peer;
+      if (peer != null && !peer.isDisposed) {
+        peer.removeRequest(index, begin, block.length);
+      }
     }
     _fileManager.writeFile(index, begin, block);
     var nextIndex = _pieceManager.selectPieceWhenReceiveData(
@@ -313,9 +351,39 @@ class PeersManager {
   }
 
   void _processRemoteRequest(dynamic source, int index, int begin, int length) {
+    if (isPaused) {
+      var peer = source as Peer;
+      var pausedRequest = _pausedRemoteRequest[peer.id];
+      if (pausedRequest == null) {
+        pausedRequest = [];
+        _pausedRemoteRequest[peer.id] = pausedRequest;
+      }
+      if (pausedRequest.length <= 6) {
+        pausedRequest.add([source, index, begin, length]);
+      } else {
+        peer.dispose('too many requests');
+      }
+      return;
+    }
     var peer = source as Peer;
+    var count = _remoteRequestCounts[peer.id];
+    if (count == null) _remoteRequestCounts[peer.id] = 0;
+    if (_remoteRequestCounts[peer.id] >= 6) {
+      peer.dispose('too many requests');
+      return;
+    }
+    _remoteRequestCounts[peer.id]++;
     _remoteRequest.add([index, begin, peer]);
     _fileManager.readFile(index, begin, length);
+  }
+
+  void _processHaveAll(dynamic source) {
+    var peer = source as Peer;
+    _processBitfieldUpdate(source, peer.remoteBitfield);
+  }
+
+  void _processHaveNone(dynamic source) {
+    _processBitfieldUpdate(source, null);
   }
 
   void _processBitfieldUpdate(dynamic source, Bitfield bitfield) {
@@ -381,26 +449,26 @@ class PeersManager {
       dynamic source, int index, int begin, int length) {
     var peer = source as Peer;
     // 如果超时，不会重新请求，等待。实在不来会在销毁peer的时候释放所有它对应的请求
-    _addTimeoutRequest(index, begin, length);
+    _addTimeoutRequest(index, begin, length, source);
     log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
         name: runtimeType.toString());
-    if (_pieceProvider[index] != null &&
-        _pieceProvider[index].haveAvalidateSubPiece()) {
-      _requestPieces(peer, index);
-    } else {
-      _requestPieces(peer);
-    }
+    // if (_pieceProvider[index] != null &&
+    //     _pieceProvider[index].haveAvalidateSubPiece()) {
+    //   _requestPieces(peer, index);
+    // } else {
+    //   _requestPieces(peer);
+    // }
   }
 
   /// 往time out request buffer中记录
-  bool _addTimeoutRequest(int index, int begin, int length) {
+  bool _addTimeoutRequest(int index, int begin, int length, Peer peer) {
     for (var i = 0; i < _timeoutRequest.length; i++) {
       var r = _timeoutRequest[i];
       if (r[0] == index && r[1] == begin && length == r[2]) {
         return false;
       }
     }
-    _timeoutRequest.add([index, begin, length]);
+    _timeoutRequest.add([index, begin, length, peer]);
     return true;
   }
 
@@ -420,30 +488,84 @@ class PeersManager {
     return false;
   }
 
+  void _sendKeepAliveToAll() {
+    var _t = (Set<Peer> peers) {
+      peers.forEach((peer) {
+        Timer.run(() => _keepAlive(peer));
+      });
+    };
+
+    _t(interestedPeers);
+    // _t(noResponsePeers);
+    _t(notInterestedPeers);
+  }
+
+  void _keepAlive(Peer peer) {
+    peer.sendKeeplive();
+  }
+
+  void pause() {
+    if (_paused) return;
+    _paused = true;
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = Timer(Duration(seconds: 110), _sendKeepAliveToAll);
+  }
+
+  void resume() {
+    if (!_paused) return;
+    _paused = false;
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+    _pausedRequest.forEach((element) {
+      var peer = element[0] as Peer;
+      var index = element[1];
+      if (!peer.isDisposed) Timer.run(() => _requestPieces(peer, index));
+    });
+    _pausedRequest.clear();
+
+    _pausedRemoteRequest.forEach((key, value) {
+      value.forEach((element) {
+        var peer = element[0] as Peer;
+        var index = element[1];
+        var begin = element[2];
+        var length = element[3];
+        if (!peer.isDisposed) {
+          Timer.run(() => _processRemoteRequest(peer, index, begin, length));
+        }
+      });
+    });
+    _pausedRemoteRequest.clear();
+  }
+
   Future dispose() async {
-    var l = <Future>[];
     _fileManager.offSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.offSubPieceReadComplete(readSubPieceComplete);
     _pieceManager.offPieceComplete(_processPieceWriteComplete);
 
-    l.add(_flushStream?.close());
-    l.add(_flushStreamS.cancel());
-
     // await _fileManager.flushPiece(_flushBuffer.toList());
+    await _flushFiles(_flushIndicesBuffer);
+    _flushIndicesBuffer?.clear();
+    _allcompletehandles?.clear();
+    _noActivePeerhandles?.clear();
+    _timeoutRequest?.clear();
+    _remoteRequest?.clear();
+    _pausedRequest.clear();
+    _pausedRemoteRequest.clear();
+    _remoteRequestCounts.clear();
+    Function _disposePeers = (Set<Peer> peers) async {
+      if (peers != null && peers.isNotEmpty) {
+        for (var i = 0; i < peers.length; i++) {
+          var peer = peers.elementAt(i);
+          unHookPeer(peer);
+          await peer.dispose('Peer Manager disposed');
+        }
+      }
+      peers.clear();
+    };
+    await _disposePeers(interestedPeers);
+    await _disposePeers(notInterestedPeers);
+    await _disposePeers(noResponsePeers);
 
-    _flushBuffer.clear();
-
-    interestedPeers.forEach((peer) {
-      l.add(peer.dispose('Peer Manager disposed'));
-    });
-    notInterestedPeers.forEach((peer) {
-      l.add(peer.dispose('Peer Manager disposed'));
-    });
-    noResponsePeers.forEach((peer) {
-      l.add(peer.dispose('Peer Manager disposed'));
-    });
     _timeoutRequest.clear();
-
-    return Stream.fromFutures(l).toList();
   }
 }

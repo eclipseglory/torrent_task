@@ -324,18 +324,18 @@ packages:
     source: hosted
     version: "0.3.11+4"
   torrent_model:
-    dependency: "direct dev"
+    dependency: "direct main"
     description:
-      path: "../torrent_model"
-      relative: true
-    source: path
-    version: "1.0.2"
+      name: torrent_model
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.0.1"
   torrent_tracker:
-    dependency: "direct dev"
+    dependency: "direct main"
     description:
-      path: "../torrent_tracker"
-      relative: true
-    source: path
+      name: torrent_tracker
+      url: "https://pub.flutter-io.cn"
+    source: hosted
     version: "1.1.0"
   typed_data:
     dependency: transitive

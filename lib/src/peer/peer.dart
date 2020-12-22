@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:torrent_client/src/peer/bitfield.dart';
-import 'package:torrent_client/src/peer/peer_event_dispatcher.dart';
-
 import '../utils.dart';
+import 'bitfield.dart';
+import 'peer_event_dispatcher.dart';
 
 const KEEP_ALIVE_MESSAGE = [0, 0, 0, 0];
 const RESERVED = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -273,6 +271,7 @@ abstract class Peer with PeerEventDispatcher {
     _cacheBuffer.clear();
     // 清空请求缓存
     _requestBuffer.clear();
+    _requestTimeoutMap.clear();
     _remoteRequestBuffer.clear();
     // 重置fast pieces
     _remoteAllowFastPieces.clear();
@@ -282,6 +281,27 @@ abstract class Peer with PeerEventDispatcher {
     // 重置远程fast extension标识
     remoteEnableFastPeer = false;
     _startTime = -1;
+  }
+
+  bool removeRequest(int index, int begin, int length) {
+    if (_removeRequestFromBuffer(index, begin)) {
+      var timer = _requestTimeoutMap.remove('$index-$begin');
+      timer?.cancel();
+      return true;
+    }
+    return false;
+  }
+
+  bool addRequest(int index, int begin, int length,
+      [int timeout = REQUEST_TIME_OUT]) {
+    if (_requestBuffer.length >= MAX_REQUEST_COUNT) return false;
+    _requestBuffer.add([index, begin, length]);
+    if (_startTime == -1) _startTime = DateTime.now().millisecondsSinceEpoch;
+    var t = Timer(Duration(seconds: timeout), () {
+      _requestTimeout(index, begin, length);
+    });
+    _requestTimeoutMap['$index-$begin'] = t;
+    return true;
   }
 
   void _processReceiveData(dynamic data) {
@@ -427,7 +447,7 @@ abstract class Peer with PeerEventDispatcher {
   /// 从requestbuffer中将request删除
   ///
   /// 每当得到了piece回应或者request超时，都会调用此方法
-  void _removeRequestFromBuffer(int index, int begin) {
+  bool _removeRequestFromBuffer(int index, int begin) {
     var finish = -1;
     for (var i = 0; i < _requestBuffer.length; i++) {
       var r = _requestBuffer[i];
@@ -436,7 +456,11 @@ abstract class Peer with PeerEventDispatcher {
         break;
       }
     }
-    if (finish != -1) _requestBuffer.removeAt(finish);
+    if (finish != -1) {
+      _requestBuffer.removeAt(finish);
+      return true;
+    }
+    return false;
   }
 
   void _processCancel(List<int> message, [int offset = 1]) {
@@ -511,22 +535,12 @@ abstract class Peer with PeerEventDispatcher {
     var index = view.getUint32(offset);
     var begin = view.getUint32(offset + 4);
     var length = view.getUint32(offset + 8);
-    var match = false;
-    var requestIndex;
-    for (var i = 0; i < _requestBuffer.length; i++) {
-      var r = _requestBuffer[i];
-      if (r[0] == index && r[1] == begin) {
-        match = true;
-        requestIndex = i;
-        break;
-      }
-    }
-    if (!match) {
+    if (removeRequest(index, begin, length)) {
+      fireRejectRequest(index, begin, length);
+    } else {
       dispose('Never send request ($index,$begin) but recieve a rejection');
       return;
     }
-    _requestBuffer.removeAt(requestIndex);
-    fireRejectRequest(index, begin, length);
   }
 
   void _processAllowFast(List<int> message, [int offset = 1]) {
@@ -579,18 +593,11 @@ abstract class Peer with PeerEventDispatcher {
     var view = ByteData.view(Uint8List.fromList(message).buffer);
     var index = view.getUint32(offset);
     var begin = view.getUint32(offset + 4);
-    _removeRequestFromBuffer(index, begin);
-    var timer = _requestTimeoutMap.remove('$index-$begin');
-    var timeout = false;
-    if (timer == null) {
-      // 说明这个piece是超时后收到的
-      timeout = true;
-    }
-    timer?.cancel();
+    var requested = removeRequest(index, begin, message.length);
     var contentLength = message.length - offset - 8;
     _downloaded += contentLength;
     _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
-    firePiece(index, begin, message.sublist(offset + 8), timeout);
+    firePiece(index, begin, message.sublist(offset + 8));
   }
 
   void _processHave(int index) {
@@ -753,13 +760,10 @@ abstract class Peer with PeerEventDispatcher {
         return false;
       }
     }
-    if (_requestBuffer.length >= MAX_REQUEST_COUNT) return false;
-    _requestBuffer.add([index, begin, length]);
-    if (_startTime == -1) _startTime = DateTime.now().millisecondsSinceEpoch;
-    var t = Timer(Duration(seconds: timeout), () {
-      _requestTimeout(index, begin, length);
-    });
-    _requestTimeoutMap['$index-$begin'] = t;
+
+    if (!addRequest(index, begin, length, timeout)) {
+      return false;
+    }
     var bytes = Uint8List(12);
     var view = ByteData.view(bytes.buffer);
     view.setUint32(0, index, Endian.big);

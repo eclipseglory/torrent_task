@@ -107,11 +107,10 @@ mixin PeerEventDispatcher {
     });
   }
 
-  void firePiece(int index, int begin, List<int> block,
-      [bool afterTimeout = false]) {
+  void firePiece(int index, int begin, List<int> block) {
     var fSet = _handleFunctions[PEER_EVENT_PIECE];
     fSet?.forEach((f) {
-      Timer.run(() => f(this, index, begin, block, afterTimeout));
+      Timer.run(() => f(this, index, begin, block));
     });
   }
 
@@ -253,18 +252,14 @@ mixin PeerEventDispatcher {
 
   /// Add `receive remote piece`  event handler
   bool onPiece(
-      Function(dynamic source, int index, int begin, List<int> block,
-              bool afterTimeout)
-          handle) {
+      Function(dynamic source, int index, int begin, List<int> block) handle) {
     var list = _getFunctionSet(PEER_EVENT_PIECE);
     return list.add(handle);
   }
 
   /// Remove `receive remote piece`  event handler
   bool offPiece(
-      Function(dynamic source, int index, int begin, List<int> block,
-              bool afterTimeout)
-          handle) {
+      Function(dynamic source, int index, int begin, List<int> block) handle) {
     var list = _getFunctionSet(PEER_EVENT_PIECE);
     return list.remove(handle);
   }

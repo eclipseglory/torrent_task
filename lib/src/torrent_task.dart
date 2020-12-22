@@ -1,8 +1,8 @@
+import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:torrent_client/src/utils.dart';
 import 'package:torrent_model/torrent_model.dart';
 import 'package:torrent_tracker/torrent_tracker.dart';
 
@@ -13,6 +13,7 @@ import 'peer/tcp_peer.dart';
 import 'piece/base_piece_selector.dart';
 import 'piece/piece_manager.dart';
 import 'peer/peers_manager.dart';
+import 'utils.dart';
 
 const MAX_PEERS = 50;
 const MAX_IN_PEERS = 10;
@@ -25,25 +26,61 @@ abstract class TorrentTask {
 
   double get uploadSpeed;
 
+  /// Downloaded total bytes length
+  int get downloaded;
+
   Future start();
 
   Future stop();
 
-  Future complete();
+  bool get isPaused;
 
   void pause();
 
   void resume();
 
-  void delete();
+  // Future deleteTask();
+
+  // Future deleteTaskAndFiles();
+
+  bool onTaskComplete(void Function() handler);
+
+  bool offTaskComplete(void Function() handler);
+
+  bool onFileComplete(void Function(String filepath) handler);
+
+  bool offFileComplete(void Function(String filepath) handler);
+
+  bool onStop(void Function() handler);
+
+  bool offStop(void Function() handler);
+
+  bool onPause(void Function() handler);
+
+  bool offPause(void Function() handler);
+
+  bool onResume(void Function() handler);
+
+  bool offResume(void Function() handler);
 
   @Deprecated('This method is just for debug')
   void addPeer(Uri host, Uri peer);
 
+  @Deprecated('This property is just for debug')
   TorrentAnnounceTracker get tracker;
 }
 
 class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
+  final Set<void Function()> _taskCompleteHandlers = {};
+
+  final Set<void Function(String filePath)> _fileCompleteHandlers = {};
+
+  final Set<void Function()> _stopHandlers = {};
+
+  final Set<void Function()> _resumeHandlers = {};
+
+  final Set<void Function()> _pauseHandlers = {};
+
   TorrentAnnounceTracker _tracker;
 
   bool _trackerRunning = false;
@@ -75,6 +112,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   int _startUploaded = 0;
 
   final Set<String> _cominIp = {};
+
+  bool _paused = false;
 
   _TorrentTask(this._metaInfo, this._savePath) {
     _peerId = generatePeerId();
@@ -129,29 +168,25 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         peer.dispose('Download complete,disconnect seeder: ${peer.address}');
       }
     });
-
-    // TODO DEBUG , need to remove later
-    results.forEach((element) {
-      print(element);
-    });
-    print('全部下载完毕');
+    _fireTaskComplete();
   }
 
   void _whenFileDownloadComplete(String filePath) {
-    print('$filePath 下载完成');
+    _fireFileComplete(filePath);
   }
 
   void _whenTrackerOverOneturn(int totalTrackers) {
-    print('all tracker over');
     _trackerRunning = false;
     _peerIds.clear();
   }
 
   void _whenNoActivePeers() {
-    if (_fileManager.isAllComplete) return;
+    if (_fileManager != null && _fileManager.isAllComplete) return;
     if (!_trackerRunning) {
       _trackerRunning = true;
-      _tracker.restart();
+      try {
+        _tracker?.restart();
+      } finally {}
     }
   }
 
@@ -202,23 +237,23 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  void delete([bool deleteFiles = false]) {
-    _tracker?.stop();
-    if (deleteFiles) {
-      _fileManager?.delete();
-    } else {
-      _stateFile?.delete();
-    }
+  void pause() {
+    if (_paused) return;
+    _paused = true;
+    _peersManager?.pause();
+    _fireTaskPaused();
   }
 
   @override
-  void pause() {
-    // TODO: implement pause
-  }
+  bool get isPaused => _paused;
 
   @override
   void resume() {
-    // TODO: implement resume
+    if (isPaused) {
+      _paused = false;
+      _peersManager?.resume();
+      _fireTaskResume();
+    }
   }
 
   @override
@@ -228,14 +263,14 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
     await init(_metaInfo, _savePath);
     _serverSocket.listen(_hookInPeer);
-
-    print('开始下载：${_metaInfo.name} , ${_serverSocket.port}');
-    print(
-        '已经下载${_stateFile.bitfield.completedPieces.length}个片段，共有${_stateFile.bitfield.piecesNum}个片段');
-    print('下载:${_stateFile.downloaded / (1024 * 1024)} mb');
-    print('上传:${_stateFile.uploaded / (1024 * 1024)} mb');
-    print(
-        '剩余:${(_metaInfo.length - _stateFile.downloaded) / (1024 * 1024)} mb');
+    var map = {};
+    map['name'] = _metaInfo.name;
+    map['tcp_socket'] = _serverSocket.port;
+    map['comoplete_pieces'] = List.from(_stateFile.bitfield.completedPieces);
+    map['total_pieces_num'] = _stateFile.bitfield.piecesNum;
+    map['downloaded'] = _stateFile.downloaded;
+    map['uploaded'] = _stateFile.uploaded;
+    map['total_length'] = _metaInfo.length;
     // 主动访问的peer:
     _tracker.onPeerEvent(_hookOutPeer);
     _tracker.onAllAnnounceOver(_whenTrackerOverOneturn);
@@ -243,59 +278,60 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _peersManager.onNoActivePeerEvent(_whenNoActivePeers);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
 
-    if (_fileManager.localBitfield.completedPieces.length ==
-        _fileManager.localBitfield.piecesNum) {
-      try {
-        return _tracker.complete();
-      } catch (e) {
+    if (_fileManager.isAllComplete) {
+      _tracker.complete().catchError((e) async {
         log('Try to complete tracker error :',
             error: e, name: runtimeType.toString());
-        return dispose();
-      }
+        await dispose();
+      });
     } else {
-      try {
-        _trackerRunning = true;
-        return _tracker.start(true);
-      } catch (e) {
-        log('Try to start tracker error :',
+      _trackerRunning = true;
+      _tracker.start().catchError((e) async {
+        log('Try to complete tracker error :',
             error: e, name: runtimeType.toString());
-        return dispose();
-      }
+        await dispose();
+      });
     }
+    return map;
   }
 
   @override
   Future stop([bool force = false]) async {
     await _tracker?.stop(force);
-    return dispose();
+    var tempHandler = Set<Function>.from(_stopHandlers);
+    await dispose();
+    tempHandler.forEach((element) {
+      Timer.run(() => element());
+    });
+    tempHandler.clear();
+    tempHandler = null;
   }
 
   Future dispose() async {
-    var l = <Future>[];
-    _tracker.offPeerEvent(_hookOutPeer);
-    _tracker.offAllAnnounceOver(_whenTrackerOverOneturn);
-    _peersManager.offAllComplete(_whenTaskDownloadComplete);
-    _fileManager.offFileComplete(_whenFileDownloadComplete);
-    l.add(_tracker?.dispose());
+    _fileCompleteHandlers.clear();
+    _taskCompleteHandlers.clear();
+    _pauseHandlers.clear();
+    _resumeHandlers.clear();
+    _stopHandlers.clear();
+    _tracker?.offPeerEvent(_hookOutPeer);
+    _tracker?.offAllAnnounceOver(_whenTrackerOverOneturn);
+    _peersManager?.offAllComplete(_whenTaskDownloadComplete);
+    _fileManager?.offFileComplete(_whenFileDownloadComplete);
+    // 这是有顺序的,先停止tracker运行,然后停止监听serversocket以及所有的peer,最后关闭文件系统
+    await _tracker?.dispose();
     _tracker = null;
-    l.add(_peersManager?.dispose());
+    await _peersManager?.dispose();
     _peersManager = null;
-    l.add(_fileManager?.close());
+    await _serverSocket?.close();
+    _serverSocket = null;
+    await _fileManager?.close();
     _fileManager = null;
 
     _peerIds.clear();
 
-    l.add(_serverSocket?.close());
-    _serverSocket = null;
     _startTime = -1;
     _cominIp.clear();
-    return Stream.fromFutures(l).toList();
-  }
-
-  @override
-  Future complete() {
-    // TODO: implement complete
-    throw UnimplementedError();
+    return;
   }
 
   @override
@@ -314,4 +350,87 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   @override
   TorrentAnnounceTracker get tracker => _tracker;
+
+  @override
+  bool offFileComplete(void Function(String filepath) handler) {
+    return _fileCompleteHandlers.remove(handler);
+  }
+
+  void _fireFileComplete(String filepath) {
+    _fileCompleteHandlers.forEach((handler) {
+      Timer.run(() => handler(filepath));
+    });
+  }
+
+  @override
+  bool offPause(void Function() handler) {
+    return _pauseHandlers.remove(handler);
+  }
+
+  @override
+  bool offResume(void Function() handler) {
+    return _resumeHandlers.remove(handler);
+  }
+
+  @override
+  bool offStop(void Function() handler) {
+    return _stopHandlers.remove(handler);
+  }
+
+  @override
+  bool offTaskComplete(void Function() handler) {
+    return _taskCompleteHandlers.remove(handler);
+  }
+
+  @override
+  bool onFileComplete(void Function(String filepath) handler) {
+    return _fileCompleteHandlers.add(handler);
+  }
+
+  @override
+  bool onPause(void Function() handler) {
+    return _pauseHandlers.add(handler);
+  }
+
+  @override
+  bool onResume(void Function() handler) {
+    return _resumeHandlers.add(handler);
+  }
+
+  @override
+  bool onStop(void Function() handler) {
+    return _stopHandlers.add(handler);
+  }
+
+  @override
+  bool onTaskComplete(void Function() handler) {
+    return _taskCompleteHandlers.add(handler);
+  }
+
+  void _fireTaskComplete() {
+    _taskCompleteHandlers.forEach((element) {
+      Timer.run(() => element());
+    });
+  }
+
+  void _fireTaskStop() {
+    _stopHandlers.forEach((element) {
+      Timer.run(() => element());
+    });
+  }
+
+  @override
+  int get downloaded => _fileManager?.downloaded;
+
+  void _fireTaskPaused() {
+    _pauseHandlers.forEach((element) {
+      Timer.run(() => element());
+    });
+  }
+
+  void _fireTaskResume() {
+    _resumeHandlers.forEach((element) {
+      Timer.run(() => element());
+    });
+  }
 }

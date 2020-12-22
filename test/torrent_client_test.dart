@@ -5,12 +5,8 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
-import 'package:torrent_client/src/file/download_file.dart';
-import 'package:torrent_client/src/peer/bitfield.dart';
-import 'package:torrent_client/src/file/state_file.dart';
-import 'package:torrent_client/src/piece/piece.dart';
-import 'package:torrent_client/src/utils.dart';
 import 'package:torrent_model/torrent_model.dart';
+import 'package:torrent_task/torrent_task_all.dart';
 
 void main() {
   group('Bitfield test - ', () {
@@ -246,6 +242,7 @@ void main() {
       var t = File('$directory/${torrent.infoHash}.bt.state');
       assert(await t.exists());
       await stateFile.delete();
+      await stateFile.delete(); //删除两次
       assert(!await t.exists());
     });
   });
@@ -260,6 +257,7 @@ void main() {
       var result = String.fromCharCodes(bytes);
       assert(result == content, '验证读取内容错误');
       await file.close();
+      await file.close(); // 关闭两次
       var file1 = File('test/test.txt');
       assert(await file1.exists());
       var b = <int>[];

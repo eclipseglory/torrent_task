@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:torrent_client/src/peer/peer.dart';
+import 'peer.dart';
 
 class TCPPeer extends Peer {
   Socket _socket;

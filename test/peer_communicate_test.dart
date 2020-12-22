@@ -3,9 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
-import 'package:torrent_client/src/peer/bitfield.dart';
-import 'package:torrent_client/src/peer/tcp_peer.dart';
-import 'package:torrent_client/src/utils.dart';
+import 'package:torrent_task/src/peer/tcp_peer.dart';
+import 'package:torrent_task/torrent_task_all.dart';
 
 void main() {
   group('Peer communicate - ', () {
@@ -109,7 +108,7 @@ void main() {
           callMap['allow_fast'] = true;
           peer.sendRequest(index, 0);
         });
-        peer.onPiece((p, index, begin, block, afterTimeout) async {
+        peer.onPiece((p, index, begin, block) async {
           callMap['piece'] = true;
           assert(block.length == DEFAULT_REQUEST_LENGTH);
           assert(block[0] == index);
