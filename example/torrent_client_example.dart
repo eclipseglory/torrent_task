@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:torrent_model/torrent_model.dart';
-import 'package:torrent_task/torrent_task_all.dart';
+import 'package:torrent_task/torrent_task.dart';
 
 var peers = <Uri>{};
 void main() async {

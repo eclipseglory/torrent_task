@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:torrent_task/src/peer/tcp_peer.dart';
-import 'package:torrent_task/torrent_task_all.dart';
+import 'package:torrent_task/torrent_task.dart';
 
 void main() {
   group('Peer communicate - ', () {
