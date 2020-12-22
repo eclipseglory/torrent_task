@@ -1,2 +1,2 @@
-export 'torrent_task.dart';
+export 'task.dart';
 export 'utils.dart';

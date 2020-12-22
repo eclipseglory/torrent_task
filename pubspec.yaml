@@ -1,6 +1,6 @@
 name: torrent_task
-description: A starting point for Dart libraries or applications.
-version: 1.0.0
+description: Dart library for implement BitTorrent download client.
+version: 0.0.1
 repository: https://github.com/eclipseglory/torrent_task
 issue_tracker : https://github.com/eclipseglory/torrent_task/issues
 publish_to: https://pub.dev/
