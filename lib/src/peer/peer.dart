@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:developer';
+import 'dart:developer' as dev;
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../utils.dart';
@@ -99,7 +100,7 @@ abstract class Peer with PeerEventDispatcher {
   final Uri address;
 
   /// Torrent infohash buffer
-  final Uint8List _infoHashBuffer;
+  final List<int> _infoHashBuffer;
 
   /// Local Peer Id
   final String _localPeerId; // 本机的peer id。发送消息会用到
@@ -143,7 +144,17 @@ abstract class Peer with PeerEventDispatcher {
 
   int _uploaded = 0;
 
-  int _startTime = -1;
+  double _downloadSpeed = 0.0;
+
+  double get downloadSpeed => _downloadSpeed;
+
+  double _maxDownloadSpeed = 0.0;
+
+  double get maxDownloadSpeed => _maxDownloadSpeed;
+
+  double _uploadSpeed = 0.0;
+
+  double get uploadSpeed => _uploadSpeed;
 
   bool remoteEnableFastPeer = false;
 
@@ -208,18 +219,9 @@ abstract class Peer with PeerEventDispatcher {
 
   bool get chokeMe => _chokeMe;
 
-  /// 平均下载速度，b/s
-  double get downloadSpeed {
-    if (_startTime == -1) return 0.0;
-    return _downloaded *
-        1000 /
-        (DateTime.now().millisecondsSinceEpoch - _startTime);
-  }
-
   set chokeMe(bool c) {
     if (c != _chokeMe) {
       _chokeMe = c;
-      if (_chokeMe) _startTime = -1;
       fireChokeChangeEvent(_chokeMe);
     }
   }
@@ -280,23 +282,22 @@ abstract class Peer with PeerEventDispatcher {
     _remoteSuggestPieces.clear();
     // 重置远程fast extension标识
     remoteEnableFastPeer = false;
-    _startTime = -1;
   }
 
-  bool removeRequest(int index, int begin, int length) {
-    if (_removeRequestFromBuffer(index, begin)) {
+  List<int> removeRequest(int index, int begin, int length) {
+    var request = _removeRequestFromBuffer(index, begin, length);
+    if (request != null) {
       var timer = _requestTimeoutMap.remove('$index-$begin');
       timer?.cancel();
-      return true;
     }
-    return false;
+    return request;
   }
 
   bool addRequest(int index, int begin, int length,
       [int timeout = REQUEST_TIME_OUT]) {
     if (_requestBuffer.length >= MAX_REQUEST_COUNT) return false;
-    _requestBuffer.add([index, begin, length]);
-    if (_startTime == -1) _startTime = DateTime.now().millisecondsSinceEpoch;
+    _requestBuffer
+        .add([index, begin, length, DateTime.now().millisecondsSinceEpoch]);
     var t = Timer(Duration(seconds: timeout), () {
       _requestTimeout(index, begin, length);
     });
@@ -447,20 +448,28 @@ abstract class Peer with PeerEventDispatcher {
   /// 从requestbuffer中将request删除
   ///
   /// 每当得到了piece回应或者request超时，都会调用此方法
-  bool _removeRequestFromBuffer(int index, int begin) {
-    var finish = -1;
+  List<int> _removeRequestFromBuffer(int index, int begin, int length) {
+    var i = _findRequestIndexFromBuffer(index, begin, length);
+    if (i != -1) {
+      return _requestBuffer.removeAt(i);
+    }
+    return null;
+  }
+
+  List<int> _findRequestFromBuffer(int index, int begin, int length) {
+    var i = _findRequestIndexFromBuffer(index, begin, length);
+    if (i != -1) return _requestBuffer[i];
+    return null;
+  }
+
+  int _findRequestIndexFromBuffer(int index, int begin, int length) {
     for (var i = 0; i < _requestBuffer.length; i++) {
       var r = _requestBuffer[i];
       if (r[0] == index && r[1] == begin) {
-        finish = i;
-        break;
+        return i;
       }
     }
-    if (finish != -1) {
-      _requestBuffer.removeAt(finish);
-      return true;
-    }
-    return false;
+    return -1;
   }
 
   void _processCancel(List<int> message, [int offset = 1]) {
@@ -535,7 +544,7 @@ abstract class Peer with PeerEventDispatcher {
     var index = view.getUint32(offset);
     var begin = view.getUint32(offset + 4);
     var length = view.getUint32(offset + 8);
-    if (removeRequest(index, begin, length)) {
+    if (removeRequest(index, begin, length) != null) {
       fireRejectRequest(index, begin, length);
     } else {
       dispose('Never send request ($index,$begin) but recieve a rejection');
@@ -577,7 +586,8 @@ abstract class Peer with PeerEventDispatcher {
     }
     if (chokeRemote) {
       if (_allowFastPieces.contains(index)) {
-        _remoteRequestBuffer.add([index, begin, length]);
+        _remoteRequestBuffer
+            .add([index, begin, length, DateTime.now().millisecondsSinceEpoch]);
         fireRequest(index, begin, length);
         return;
       } else {
@@ -585,7 +595,8 @@ abstract class Peer with PeerEventDispatcher {
         return;
       }
     }
-    _remoteRequestBuffer.add([index, begin, length]);
+    _remoteRequestBuffer
+        .add([index, begin, length, DateTime.now().millisecondsSinceEpoch]);
     fireRequest(index, begin, length);
   }
 
@@ -593,9 +604,19 @@ abstract class Peer with PeerEventDispatcher {
     var view = ByteData.view(Uint8List.fromList(message).buffer);
     var index = view.getUint32(offset);
     var begin = view.getUint32(offset + 4);
-    var requested = removeRequest(index, begin, message.length);
+    var request = removeRequest(index, begin, message.length);
     var contentLength = message.length - offset - 8;
     _downloaded += contentLength;
+    var requestTime = request[3];
+    var passed = DateTime.now().millisecondsSinceEpoch - requestTime;
+    var _currentSpeed = message.length / passed;
+    if (_downloadSpeed == 0.0) {
+      _downloadSpeed = _currentSpeed;
+    } else {
+      _downloadSpeed += _currentSpeed;
+      _downloadSpeed = _downloadSpeed / 2;
+    }
+    _maxDownloadSpeed = max(_maxDownloadSpeed, _currentSpeed);
     _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
     firePiece(index, begin, message.sublist(offset + 8));
   }
@@ -721,7 +742,7 @@ abstract class Peer with PeerEventDispatcher {
         return false;
       }
     }
-    var requestIndex;
+    int requestIndex;
     for (var i = 0; i < _remoteRequestBuffer.length; i++) {
       var r = _remoteRequestBuffer[i];
       if (r[0] == index && r[1] == begin) {
@@ -730,7 +751,7 @@ abstract class Peer with PeerEventDispatcher {
       }
     }
     if (requestIndex == null) return false;
-    _remoteRequestBuffer.removeAt(requestIndex);
+    var request = _remoteRequestBuffer.removeAt(requestIndex);
 
     var bytes = <int>[];
     var messageHead = Uint8List(8);
@@ -740,6 +761,14 @@ abstract class Peer with PeerEventDispatcher {
     bytes.addAll(messageHead);
     bytes.addAll(block);
     sendMessage(ID_PIECE, bytes);
+    _uploaded += bytes.length;
+    var s = bytes.length / DateTime.now().millisecondsSinceEpoch - request[3];
+    if (_uploadSpeed == 0) {
+      _uploadSpeed = s;
+    } else {
+      _uploadSpeed += s;
+      _uploadSpeed = _uploadSpeed / 2;
+    }
     return true;
   }
 
@@ -774,8 +803,8 @@ abstract class Peer with PeerEventDispatcher {
   }
 
   void _requestTimeout(int index, int begin, int length) {
-    _requestTimeoutMap.remove('$index-$begin');
-    // _removeRequestFromBuffer(index, begin);
+    var timer = _requestTimeoutMap.remove('$index-$begin');
+    timer?.cancel();
     fireRequestTimeoutEvent(index, begin, length);
   }
 
@@ -983,14 +1012,17 @@ abstract class Peer with PeerEventDispatcher {
     _requestTimeoutMap.clear();
     _countdownTimer?.cancel();
     _countdownTimer = null;
+    if (_downloadSpeed != 0.0) {
+      _downloadSpeed = _downloadSpeed / (_requestBuffer.length + 1);
+    }
     return re;
   }
 
   void _log(String message, [dynamic error]) {
     if (error != null) {
-      log(message, error: error, name: runtimeType.toString());
+      dev.log(message, error: error, name: runtimeType.toString());
     } else {
-      log(message, name: runtimeType.toString());
+      // log(message, name: runtimeType.toString());
     }
   }
 

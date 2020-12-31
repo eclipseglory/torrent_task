@@ -21,9 +21,11 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 /// TODO:
 /// - 没有处理对外的Suggest Piece/Fast Allow
 class PeersManager {
-  final Set<Peer> interestedPeers = {};
-  final Set<Peer> notInterestedPeers = {};
-  final Set<Peer> noResponsePeers = {};
+  // final Set<Peer> interestedPeers = {};
+  // final Set<Peer> notInterestedPeers = {};
+  // final Set<Peer> noResponsePeers = {};
+
+  final Set<Peer> _peers = {};
 
   /// 写入磁盘的缓存最大值
   int maxWriteBufferSize;
@@ -74,6 +76,29 @@ class PeersManager {
 
   bool get isPaused => _paused;
 
+  int get peersNumber {
+    if (_peers == null || _peers.isEmpty) return 0;
+    return _peers.length;
+  }
+
+  double get downloadSpeed {
+    var s = 0.0;
+    if (_peers != null) {
+      s = _peers.fold(
+          0.0, (previousValue, peer) => previousValue + peer.downloadSpeed);
+    }
+    return s;
+  }
+
+  double get uploadSpeed {
+    var s = 0.0;
+    if (_peers != null) {
+      s = _peers.fold(
+          0.0, (previousValue, peer) => previousValue + peer.uploadSpeed);
+    }
+    return s;
+  }
+
   void hookPeer(Peer peer) {
     if (_peerExsist(peer)) return;
     peer.onDispose(_processPeerDispose);
@@ -112,9 +137,7 @@ class PeersManager {
   }
 
   bool _peerExsist(Peer id) {
-    return interestedPeers.contains(id) ||
-        notInterestedPeers.contains(id) ||
-        noResponsePeers.contains(id);
+    return _peers.contains(id);
   }
 
   void _processSubPieceWriteComplte(int pieceIndex, int begin, int length) {
@@ -124,15 +147,8 @@ class PeersManager {
   void _processPieceWriteComplete(int index) async {
     if (_fileManager.localHave(index)) return;
     await _fileManager.updateBitfield(index);
-    interestedPeers.forEach((peer) {
+    _peers.forEach((peer) {
       // if (!peer.remoteHave(index)) {
-      log('收到完整片段，通知 ${peer.address} : $index', name: runtimeType.toString());
-      peer.sendHave(index);
-      // }
-    });
-    notInterestedPeers.forEach((peer) {
-      // if (!peer.remoteHave(index)) {
-      log('收到完整片段，通知 ${peer.address} : $index', name: runtimeType.toString());
       peer.sendHave(index);
       // }
     });
@@ -220,8 +236,8 @@ class PeersManager {
   void _processPeerDispose(dynamic source, [dynamic reason]) {
     var peer = source as Peer;
     var bufferRequests = peer.requestBuffer;
-    log('Peer已销毁, ${peer.address},退还收到未收到Request:$bufferRequests,将其删除',
-        error: reason, name: runtimeType.toString());
+    // log('Peer已销毁, ${peer.address},退还收到未收到Request:$bufferRequests,将其删除',
+    //     error: reason, name: runtimeType.toString());
 
     bufferRequests.forEach((element) {
       var pindex = element[0];
@@ -236,9 +252,7 @@ class PeersManager {
     completedPieces.forEach((index) {
       _pieceProvider[index]?.removeAvalidatePeer(peer.id);
     });
-    interestedPeers.remove(peer);
-    notInterestedPeers.remove(peer);
-    noResponsePeers.remove(peer);
+    _peers.remove(peer);
     _pausedRemoteRequest.remove(peer.id);
     _remoteRequestCounts.remove(peer.id);
     var tempIndex = [];
@@ -251,8 +265,7 @@ class PeersManager {
     tempIndex.forEach((index) {
       _pausedRequest.removeAt(index);
     });
-    log('目前还有 ${interestedPeers.length}个活跃节点. ');
-    if (interestedPeers.isEmpty) {
+    if (_peers.isEmpty) {
       _fireNoActivePeer();
     }
   }
@@ -274,7 +287,7 @@ class PeersManager {
   void _peerConnected(dynamic source) {
     var peer = source as Peer;
     log('${peer.address} is connected', name: runtimeType.toString());
-    noResponsePeers.add(peer);
+    _peers.add(peer);
     peer.sendHandShake();
   }
 
@@ -345,8 +358,6 @@ class PeersManager {
 
   void _processPeerHandshake(dynamic source, String remotePeerId, data) {
     var peer = source as Peer;
-    noResponsePeers.remove(peer);
-    notInterestedPeers.add(peer);
     peer.sendBitfield(_fileManager.localBitfield);
   }
 
@@ -394,9 +405,6 @@ class PeersManager {
         if (bitfield.getBit(i)) {
           if (!peer.interestedRemote && !_fileManager.localHave(i)) {
             peer.sendInterested(true);
-            notInterestedPeers.remove(peer);
-            interestedPeers.add(peer);
-            log('${peer.address} 有我要的资源 $bitfield，发送 interested');
             return;
           }
         }
@@ -409,10 +417,7 @@ class PeersManager {
   void _processHaveUpdate(dynamic source, int index) {
     var peer = source as Peer;
     if (!_fileManager.localHave(index)) {
-      log('${peer.address} 有我要的资源，发送 interested并更新piece的avalidate peer');
       peer.sendInterested(true);
-      notInterestedPeers.remove(peer);
-      interestedPeers.add(peer);
       _pieceProvider[index]?.addAvalidatePeer(peer.id);
       Timer.run(() => _requestPieces(peer));
     }
@@ -489,15 +494,9 @@ class PeersManager {
   }
 
   void _sendKeepAliveToAll() {
-    var _t = (Set<Peer> peers) {
-      peers.forEach((peer) {
-        Timer.run(() => _keepAlive(peer));
-      });
-    };
-
-    _t(interestedPeers);
-    // _t(noResponsePeers);
-    _t(notInterestedPeers);
+    _peers?.forEach((peer) {
+      Timer.run(() => _keepAlive(peer));
+    });
   }
 
   void _keepAlive(Peer peer) {
@@ -537,6 +536,15 @@ class PeersManager {
     _pausedRemoteRequest.clear();
   }
 
+  Future disposeAllSeeder([dynamic reason]) async {
+    _peers?.forEach((peer) async {
+      if (peer.isSeeder) {
+        await peer.dispose(reason);
+      }
+    });
+    return;
+  }
+
   Future dispose() async {
     _fileManager.offSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.offSubPieceReadComplete(readSubPieceComplete);
@@ -562,9 +570,7 @@ class PeersManager {
       }
       peers.clear();
     };
-    await _disposePeers(interestedPeers);
-    await _disposePeers(notInterestedPeers);
-    await _disposePeers(noResponsePeers);
+    await _disposePeers(_peers);
 
     _timeoutRequest.clear();
   }

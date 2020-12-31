@@ -5,13 +5,11 @@ Dart library for implementing BitTorrent client.
 - [BEP 0003 The BitTorrent Protocol Specification](http://www.bittorrent.org/beps/bep_0003.html)
 - [BEP 0006 Fast Extension](http://www.bittorrent.org/beps/bep_0006.html)
 - [BEP 0015 UDP Tracker Protocal](http://www.bittorrent.org/beps/bep_0015.html)
+- [BEP 0005 DHT Protocal](http://www.bittorrent.org/beps/bep_0005.html)
 
 
 Developing:
-
-- [BEP 0005 DHT Protocal](http://www.bittorrent.org/beps/bep_0005.html)
 - [BEP 0011	Peer Exchange (PEX)](http://www.bittorrent.org/beps/bep_0011.html)
-
 - [BEP 0009	Extension for Peers to Send Metadata Files](http://www.bittorrent.org/beps/bep_0009.html)
 - [BEP 0010	Extension Protocol](http://www.bittorrent.org/beps/bep_0010.html)
 

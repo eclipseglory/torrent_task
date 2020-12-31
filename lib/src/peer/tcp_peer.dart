@@ -1,11 +1,10 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'peer.dart';
 
 class TCPPeer extends Peer {
   Socket _socket;
-  TCPPeer(String id, String localPeerId, Uri address, Uint8List infoHashBuffer,
+  TCPPeer(String id, String localPeerId, Uri address, List<int> infoHashBuffer,
       int piecesNum,
       [this._socket])
       : super(id, localPeerId, address, infoHashBuffer, piecesNum);

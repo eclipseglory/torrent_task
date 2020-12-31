@@ -20,15 +20,19 @@ void main() async {
   });
 
   var map = await task.start();
+  model.nodes?.forEach((element) {
+    task.addDHTHost(element);
+  });
+
   print(map);
 
-  timer = Timer.periodic(Duration(seconds: 10), (timer) async {
+  timer = Timer.periodic(Duration(seconds: 2), (timer) async {
     print(
-        'download speed : ${(await task.downloadSpeed) * 1000 / 1024} , upload speed : ${task.uploadSpeed * 1000 / 1024}');
+        'Progress : ${(task.progress * 100).toStringAsFixed(2)}% , Connect num : ${task.peersNumber}. Download speed : ${((task.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)} KB/S , upload speed : ${((task.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)} KB/S');
   });
-  timer1 = Timer.periodic(Duration(seconds: randomInt(21)), (timer) async {
-    task.pause();
-    await Future.delayed(Duration(seconds: randomInt(121)));
-    task.resume();
-  });
+  // timer1 = Timer.periodic(Duration(seconds: randomInt(21)), (timer) async {
+  //   task.pause();
+  //   await Future.delayed(Duration(seconds: randomInt(121)));
+  //   task.resume();
+  // });
 }

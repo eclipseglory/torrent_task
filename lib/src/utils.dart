@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
 String generatePeerId([String prefix = '-bDRLIN-']) {
   var r = randomBytes(9);
@@ -9,9 +8,9 @@ String generatePeerId([String prefix = '-bDRLIN-']) {
   return id;
 }
 
-Uint8List randomBytes(count) {
+List<int> randomBytes(count) {
   var random = Random();
-  var bytes = Uint8List(count);
+  var bytes = List<int>(count);
   for (var i = 0; i < count; i++) {
     bytes[i] = random.nextInt(254);
   }

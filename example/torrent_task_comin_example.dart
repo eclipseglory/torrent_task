@@ -50,6 +50,5 @@ Future<void> main() async {
   //   task.resume();
   // });
   // 自己下载自己
-  task.addPeer(
-      Uri(host: '127.0.0.1', port: 53191), Uri(host: '127.0.0.1', port: 53191));
+  task.addPeer(Uri(host: '127.0.0.1', port: 53191));
 }
