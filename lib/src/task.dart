@@ -73,7 +73,7 @@ abstract class TorrentTask {
   /// 增加DHT node，一般是将torrent文件中的nodes加入进去。
   ///
   /// 当然也可以直接添加已知的node地址
-  void addDHTHost(Uri uri);
+  void addDHTNode(Uri uri);
 
   @Deprecated('This method is just for debug')
   void addPeer(Uri peer, [Uri trackerHost]);
@@ -191,34 +191,33 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   void _processTrackerPeerEvent(Tracker source, PeerEvent event) {
     var ps = event.peers;
-    var piecesNum = _metaInfo.pieces.length;
     if (ps != null && ps.isNotEmpty) {
       ps.forEach((url) {
-        var id = _createPeerLocalId(url);
-        if (id == null || _peerIds.contains(id)) return;
-        _peerIds.add(id);
-        var p = TCPPeer(id, _peerId, url, _infoHashBuffer, piecesNum);
-        _connectPeer(p);
+        _processNewPeerFound(url);
       });
     }
   }
 
+  void _processNewPeerFound(Uri url) {
+    var piecesNum = _metaInfo.pieces.length;
+    var id = _createPeerLocalId(url);
+    if (id == null || _peerIds.contains(id)) return;
+    _peerIds.add(id);
+    var p = TCPPeer(id, _peerId, url, _infoHashBuffer, piecesNum);
+    _connectPeer(p);
+  }
+
   void _processDHTPeer(InternetAddress address, int port, String infoHash) {
     var uri = Uri(host: address.address, port: port);
-    var id = _createPeerLocalId(uri);
-    if (_peerIds.add(id)) {
-      var p =
-          TCPPeer(id, _peerId, uri, _infoHashBuffer, _metaInfo.pieces.length);
-      _connectPeer(p);
-    }
+    _processNewPeerFound(uri);
   }
 
   String _createPeerLocalId(dynamic address) {
     if (address is Uri) {
-      return '${address.host}:${address.port}';
+      return '${address.host}';
     }
     if (address is Socket) {
-      return '${address.address.host}:${address.port}';
+      return '${address.address.host}';
     }
     return null;
   }
@@ -295,6 +294,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _tracker.onAllAnnounceOver(_whenTrackerOverOneturn);
     _peersManager.onAllComplete(_whenTaskDownloadComplete);
     _peersManager.onNoActivePeerEvent(_whenNoActivePeers);
+    _peersManager.onNewPeerFound(_processNewPeerFound);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
     _dht.announce(
         String.fromCharCodes(_metaInfo.infoHashBuffer), _serverSocket.port);
@@ -339,6 +339,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _tracker?.offPeerEvent(_processTrackerPeerEvent);
     _tracker?.offAllAnnounceOver(_whenTrackerOverOneturn);
     _peersManager?.offAllComplete(_whenTaskDownloadComplete);
+    _peersManager?.offNewPeerFound(_processNewPeerFound);
     _fileManager?.offFileComplete(_whenFileDownloadComplete);
     // 这是有顺序的,先停止tracker运行,然后停止监听serversocket以及所有的peer,最后关闭文件系统
     await _tracker?.dispose();
@@ -476,7 +477,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  void addDHTHost(Uri url) {
+  void addDHTNode(Uri url) {
     _dht?.addBootstrapNode(url);
   }
 }

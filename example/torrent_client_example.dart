@@ -5,8 +5,8 @@ import 'package:torrent_task/torrent_task.dart';
 
 var peers = <Uri>{};
 void main() async {
-  var model = await Torrent.parse('example/test8.torrent');
-  var task = TorrentTask.newTask(model, 'g:/bttest/');
+  var model = await Torrent.parse('example/sample3.torrent');
+  var task = TorrentTask.newTask(model, 'g:/bttest1/');
   Timer timer;
   Timer timer1;
   task.onTaskComplete(() {
@@ -21,7 +21,7 @@ void main() async {
 
   var map = await task.start();
   model.nodes?.forEach((element) {
-    task.addDHTHost(element);
+    task.addDHTNode(element);
   });
 
   print(map);

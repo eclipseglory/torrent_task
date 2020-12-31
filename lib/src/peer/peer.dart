@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as dev;
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:bencode_dart/bencode_dart.dart';
+import 'package:torrent_task/src/peer/extended_proccessor.dart';
 
 import '../utils.dart';
 import 'bitfield.dart';
@@ -43,6 +46,7 @@ const ID_REQUEST = 6;
 const ID_PIECE = 7;
 const ID_CANCEL = 8;
 const ID_PORT = 9;
+const ID_EXTENDED = 20;
 
 const OP_HAVE_ALL = 0x0e;
 const OP_HAVE_NONE = 0x0f;
@@ -62,7 +66,7 @@ typedef BoolHandle = void Function(Peer peer, bool value);
 
 typedef SingleIntHandle = void Function(Peer peer, int value);
 
-abstract class Peer with PeerEventDispatcher {
+abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// Countdown time , when peer don't receive or send any message from/to remote ,
   /// this class will invoke close.
   /// 单位:秒
@@ -160,6 +164,10 @@ abstract class Peer with PeerEventDispatcher {
 
   bool localEnableFastPeer = true;
 
+  bool remoteEnableExtended = false;
+
+  bool localEnableExtended = true;
+
   /// 本地的Allow Fast pieces
   final Set<int> _allowFastPieces = <int>{};
 
@@ -173,10 +181,11 @@ abstract class Peer with PeerEventDispatcher {
   /// [_id] 是用于区分不同Peer的Id，和[_localPeerId]不同，[_localPeerId]是bt协议中的Peer_id。
   /// [address]是远程peer的地址和端口，子类在实现的时候可以利用该值进行远程连接。[_infoHashBuffer]
   /// 是torrent文件中的infohash值，[_piecesNum]是下载项目的总piece数目，用于构建远程`Bitfield`数据
-  /// 使用。可选项[localEnableFastPeer]默认位`true`，表示本地是否开启[Fast Extension(BEP 0006)](http://www.bittorrent.org/beps/bep_0006.html)
+  /// 使用。可选项[localEnableFastPeer]默认位`true`，表示本地是否开启[Fast Extension(BEP 0006)](http://www.bittorrent.org/beps/bep_0006.html),
+  /// [localEnableExtended]表示本地是否可以使用[Extension Protocol](http://www.bittorrent.org/beps/bep_0010.html)
   Peer(this._id, this._localPeerId, this.address, this._infoHashBuffer,
       this._piecesNum,
-      {this.localEnableFastPeer = true}) {
+      {this.localEnableFastPeer = true, this.localEnableExtended = true}) {
     _remoteBitfield = Bitfield.createEmptyBitfield(_piecesNum);
   }
 
@@ -440,6 +449,9 @@ abstract class Peer with PeerEventDispatcher {
           _log('process allow fast : $address');
           _processAllowFast(message);
           return;
+        case ID_EXTENDED:
+          _processExtendedMessage(message);
+          return;
       }
     }
     _log('Cannot process the message', 'Unknown message : ${message}');
@@ -470,6 +482,23 @@ abstract class Peer with PeerEventDispatcher {
       }
     }
     return -1;
+  }
+
+  void _processExtendedMessage(List<int> message) {
+    var id = message[1];
+    var m = message.sublist(2);
+    processExtendMessage(id, m);
+  }
+
+  void sendExtendMessage(String name, dynamic data) {
+    var id = getExtendedEventId(name);
+    if (id != null) {
+      var message = <int>[];
+      message.add(id);
+      var m = encode(data);
+      message.addAll(m);
+      sendMessage(ID_EXTENDED, message);
+    }
   }
 
   void _processCancel(List<int> message, [int offset = 1]) {
@@ -607,16 +636,18 @@ abstract class Peer with PeerEventDispatcher {
     var request = removeRequest(index, begin, message.length);
     var contentLength = message.length - offset - 8;
     _downloaded += contentLength;
-    var requestTime = request[3];
-    var passed = DateTime.now().millisecondsSinceEpoch - requestTime;
-    var _currentSpeed = message.length / passed;
-    if (_downloadSpeed == 0.0) {
-      _downloadSpeed = _currentSpeed;
-    } else {
-      _downloadSpeed += _currentSpeed;
-      _downloadSpeed = _downloadSpeed / 2;
+    if (request != null) {
+      var requestTime = request[3];
+      var passed = DateTime.now().millisecondsSinceEpoch - requestTime;
+      var _currentSpeed = message.length / passed;
+      if (_downloadSpeed == 0.0) {
+        _downloadSpeed = _currentSpeed;
+      } else {
+        _downloadSpeed += _currentSpeed;
+        _downloadSpeed = _downloadSpeed / 2;
+      }
+      _maxDownloadSpeed = max(_maxDownloadSpeed, _currentSpeed);
     }
-    _maxDownloadSpeed = max(_maxDownloadSpeed, _currentSpeed);
     _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
     firePiece(index, begin, message.sublist(offset + 8));
   }
@@ -641,6 +672,8 @@ abstract class Peer with PeerEventDispatcher {
     var reseverd = data.getRange(20, 28);
     var fast = reseverd.elementAt(7) & 0x04;
     remoteEnableFastPeer = (fast == 0x04);
+    var extented = reseverd.elementAt(5);
+    var enableExtented = ((extented & 0x10) == 0x10);
     fireHandshakeEvent(_remotePeerId, data);
   }
 
@@ -702,18 +735,39 @@ abstract class Peer with PeerEventDispatcher {
     if (_handShaked) return;
     var message = <int>[];
     message.addAll(HAND_SHAKE_HEAD);
+    var reseverd = List<int>.from(RESERVED);
     if (localEnableFastPeer) {
-      var r = List<int>.from(RESERVED);
-      r[7] |= 0x04;
-      message.addAll(r);
-    } else {
-      message.addAll(RESERVED);
+      reseverd[7] |= 0x04;
     }
+    if (localEnableExtended) {
+      reseverd[5] |= 0x10;
+    }
+    message.addAll(reseverd);
     message.addAll(_infoHashBuffer);
     message.addAll(utf8.encode(_localPeerId));
     sendByteMessage(message);
+    if (localEnableExtended) {
+      var m = _createExtenedHandshakeMessage();
+      sendMessage(ID_EXTENDED, m);
+    }
     _startToCountdown();
     _handShaked = true;
+  }
+
+  List<int> _createExtenedHandshakeMessage() {
+    var message = <int>[];
+    message.add(0);
+    var d = <String, dynamic>{};
+    var rip = InternetAddress.tryParse(address.host);
+    if (rip != null) {
+      d['yourip'] = rip.rawAddress;
+    }
+    d['v'] = 'Dart BT v0.1.0';
+    d['m'] = localExtened;
+    var m = encode(d);
+    var test = decode(m);
+    message.addAll(m);
+    return message;
   }
 
   /// `keep-alive: <len=0000>`
@@ -1004,6 +1058,7 @@ abstract class Peer with PeerEventDispatcher {
     _bitfieldSended = false;
     fireDisposeEvent(reason);
     clearEventHandles();
+    clearExtendedProcessors();
     var re = _streamChunk?.cancel();
     _streamChunk = null;
     _requestTimeoutMap.forEach((key, value) {

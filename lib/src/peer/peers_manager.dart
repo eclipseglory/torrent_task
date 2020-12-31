@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:developer';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:torrent_model/torrent_model.dart';
 
@@ -21,16 +23,22 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 /// TODO:
 /// - 没有处理对外的Suggest Piece/Fast Allow
 class PeersManager {
-  // final Set<Peer> interestedPeers = {};
-  // final Set<Peer> notInterestedPeers = {};
-  // final Set<Peer> noResponsePeers = {};
+  bool _disposed = false;
+
+  bool get isDisposed => _disposed;
 
   final Set<Peer> _peers = {};
+
+  final Set<Uri> _lastUTPEX = {};
+
+  String localExtenelIP;
 
   /// 写入磁盘的缓存最大值
   int maxWriteBufferSize;
 
   final _flushIndicesBuffer = <int>{};
+
+  final Set<void Function(Uri)> _newPeerFoundHandler = {};
 
   final Set<void Function()> _allcompletehandles = {};
 
@@ -62,6 +70,8 @@ class PeersManager {
 
   final Map<String, List> _pausedRemoteRequest = {};
 
+  Timer _ut_pex_timer;
+
   PeersManager(this._pieceManager, this._pieceProvider, this._fileManager,
       this._metaInfo,
       [this.maxWriteBufferSize = MAX_WRITE_BUFFER_SIZE]) {
@@ -72,6 +82,10 @@ class PeersManager {
     _fileManager.onSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.onSubPieceReadComplete(readSubPieceComplete);
     _pieceManager.onPieceComplete(_processPieceWriteComplete);
+
+    _ut_pex_timer = Timer.periodic(Duration(seconds: 60), (timer) {
+      _sendUt_pex_peers();
+    });
   }
 
   bool get isPaused => _paused;
@@ -100,6 +114,7 @@ class PeersManager {
   }
 
   void hookPeer(Peer peer) {
+    if (peer.address.host == localExtenelIP) return;
     if (_peerExsist(peer)) return;
     peer.onDispose(_processPeerDispose);
     peer.onBitfield(_processBitfieldUpdate);
@@ -115,7 +130,14 @@ class PeersManager {
     peer.onRequestTimeout(_processRequestTimeout);
     peer.onRejectRequest(_processRejectRequest);
     peer.onAllowFast(_processAllowFast);
+    peer.onExtendedEvent(_processExtendedMessage);
+    _registerExtended(peer);
     peer.connect();
+  }
+
+  /// 支持哪些扩展在这里添加
+  void _registerExtended(Peer peer) {
+    peer.registerExtened('ut_pex');
   }
 
   void unHookPeer(Peer peer) {
@@ -134,10 +156,71 @@ class PeersManager {
     peer.offRequestTimeout(_processRequestTimeout);
     peer.offRejectRequest(_processRejectRequest);
     peer.offAllowFast(_processAllowFast);
+    peer.offExtendedEvent(_processExtendedMessage);
   }
 
   bool _peerExsist(Peer id) {
     return _peers.contains(id);
+  }
+
+  void _processExtendedMessage(dynamic source, String name, dynamic data) {
+    if (name == 'ut_pex') {
+      var added = data['added'] as List;
+      for (var i = 0; i < added.length; i += 6) {
+        var uri = parseAddress(added, i);
+        if (uri.host == localExtenelIP) continue;
+        print('获得一个PEX：$uri');
+        Timer.run(() => _fireNewPeerFound(uri));
+      }
+    }
+    if (name == 'handshake') {
+      localExtenelIP = InternetAddress.fromRawAddress(data['yourip']).host;
+    }
+  }
+
+  void _sendUt_pex_peers() {
+    var dropped = <Uri>[];
+    var added = <Uri>[];
+    _peers.forEach((p) {
+      if (!_lastUTPEX.remove(p.address)) {
+        added.add(p.address);
+      }
+    });
+    _lastUTPEX.forEach((element) {
+      dropped.add(element);
+    });
+    _lastUTPEX.clear();
+
+    var data = {};
+    data['added'] = [];
+    added.forEach((element) {
+      _lastUTPEX.add(element);
+      var p = Uint8List(2);
+      ByteData.view(p.buffer).setUint16(0, element.port);
+      var ip = InternetAddress.tryParse(element.host);
+      if (ip != null) {
+        var b = <int>[];
+        b.addAll(ip.rawAddress);
+        b.addAll(p);
+        data['added'].addAll(b);
+      }
+    });
+    data['dropped'] = [];
+    dropped.forEach((element) {
+      var p = Uint8List(2);
+      ByteData.view(p.buffer).setUint16(0, element.port);
+      var ip = InternetAddress.tryParse(element.host);
+      if (ip != null) {
+        var b = <int>[];
+        b.addAll(ip.rawAddress);
+        b.addAll(p);
+        data['dropped'].addAll(b);
+      }
+    });
+    if (data['added'].isEmpty && data['dropped'].isEmpty) return;
+    _peers.forEach((peer) {
+      peer.sendExtendMessage('ut_pex', data);
+    });
   }
 
   void _processSubPieceWriteComplte(int pieceIndex, int begin, int length) {
@@ -185,6 +268,20 @@ class PeersManager {
 
   bool offAllComplete(void Function() h) {
     return _allcompletehandles.remove(h);
+  }
+
+  bool onNewPeerFound(void Function(Uri uri) h) {
+    return _newPeerFoundHandler.add(h);
+  }
+
+  bool offNewPeerFound(void Function(Uri uri) h) {
+    return _newPeerFoundHandler.remove(h);
+  }
+
+  void _fireNewPeerFound(Uri uri) {
+    _newPeerFoundHandler.forEach((element) {
+      element(uri);
+    });
   }
 
   void readSubPieceComplete(int pieceIndex, int begin, List<int> block) {
@@ -546,6 +643,11 @@ class PeersManager {
   }
 
   Future dispose() async {
+    if (isDisposed) return;
+    _disposed = true;
+    _ut_pex_timer?.cancel();
+    _ut_pex_timer = null;
+
     _fileManager.offSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.offSubPieceReadComplete(readSubPieceComplete);
     _pieceManager.offPieceComplete(_processPieceWriteComplete);
@@ -560,6 +662,7 @@ class PeersManager {
     _pausedRequest.clear();
     _pausedRemoteRequest.clear();
     _remoteRequestCounts.clear();
+    _newPeerFoundHandler.clear();
     Function _disposePeers = (Set<Peer> peers) async {
       if (peers != null && peers.isNotEmpty) {
         for (var i = 0; i < peers.length; i++) {
