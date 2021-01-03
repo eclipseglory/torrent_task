@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'package:dartorrent_common/dartorrent_common.dart';
 
 import 'dart:typed_data';
 
@@ -10,14 +11,14 @@ String generatePeerId([String prefix = '-bDRLIN-']) {
   return id;
 }
 
-List<int> randomBytes(count) {
-  var random = Random();
-  var bytes = List<int>(count);
-  for (var i = 0; i < count; i++) {
-    bytes[i] = random.nextInt(254);
-  }
-  return bytes;
-}
+// List<int> randomBytes(count) {
+//   var random = Random();
+//   var bytes = List<int>(count);
+//   for (var i = 0; i < count; i++) {
+//     bytes[i] = random.nextInt(254);
+//   }
+//   return bytes;
+// }
 
 /// return random int number , `0 - max`
 ///

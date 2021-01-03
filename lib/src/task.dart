@@ -1,16 +1,15 @@
 import 'dart:async';
-import 'dart:developer';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:torrent_model/torrent_model.dart';
 import 'package:torrent_tracker/torrent_tracker.dart';
-import 'package:dht/dht.dart';
+import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:dht_dart/dht_dart.dart';
 
 import 'file/download_file_manager.dart';
 import 'file/state_file.dart';
 import 'peer/peer.dart';
-import 'peer/tcp_peer.dart';
 import 'piece/base_piece_selector.dart';
 import 'piece/piece_manager.dart';
 import 'peer/peers_manager.dart';
@@ -24,7 +23,13 @@ abstract class TorrentTask {
     return _TorrentTask(metaInfo, savePath);
   }
 
-  int get peersNumber;
+  void startAnnounceUrl(Uri url, Uint8List infoHash);
+
+  int get allPeersNumber;
+
+  int get connectedPeersNumber;
+
+  int get seederNumber;
 
   double get downloadSpeed;
 
@@ -97,8 +102,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   DHT _dht;
 
-  bool _trackerRunning = false;
-
   StateFile _stateFile;
 
   PieceManager _pieceManager;
@@ -117,15 +120,12 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   ServerSocket _serverSocket;
 
-  Uint8List _infoHashBuffer;
-
   final Set<String> _cominIp = {};
 
   bool _paused = false;
 
   _TorrentTask(this._metaInfo, this._savePath) {
     _peerId = generatePeerId();
-    _infoHashBuffer = _metaInfo.infoHashBuffer;
   }
 
   @override
@@ -146,28 +146,29 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
+  String _infoHashString;
+
   Future<PeersManager> _init(Torrent model, String savePath) async {
     _dht = DHT();
-    _tracker ??=
-        TorrentAnnounceTracker(model.announces.toList(), _infoHashBuffer, this);
+    _infoHashString = String.fromCharCodes(model.infoHashBuffer);
+    _tracker ??= TorrentAnnounceTracker(this);
     _stateFile ??= await StateFile.getStateFile(savePath, model);
     _pieceManager ??= PieceManager.createPieceManager(
         BasePieceSelector(), model, _stateFile.bitfield);
     _fileManager ??= await DownloadFileManager.createFileManager(
         model, savePath, _stateFile);
-    _peersManager ??=
-        PeersManager(_pieceManager, _pieceManager, _fileManager, model);
+    _peersManager ??= PeersManager(
+        _peerId, _pieceManager, _pieceManager, _fileManager, model);
     return _peersManager;
   }
 
   @override
-  void addPeer(Uri peer, [Uri trackerHost]) {
-    _tracker?.addPeer(trackerHost, peer, _metaInfo.infoHash);
-  }
+  void addPeer(Uri peer, [Uri trackerHost]) {}
 
   void _whenTaskDownloadComplete() async {
     await _peersManager.disposeAllSeeder('Download complete,disconnect seeder');
-    await _tracker.complete();
+    await _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
+        event: EVENT_COMPLETED);
     _fireTaskComplete();
   }
 
@@ -175,18 +176,15 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _fireFileComplete(filePath);
   }
 
-  void _whenTrackerOverOneturn(int totalTrackers) {
-    _trackerRunning = false;
-  }
-
+  @Deprecated('useless')
   void _whenNoActivePeers() {
-    if (_fileManager != null && _fileManager.isAllComplete) return;
-    if (!_trackerRunning) {
-      _trackerRunning = true;
-      try {
-        _tracker?.restart();
-      } finally {}
-    }
+    // if (_fileManager != null && _fileManager.isAllComplete) return;
+    // if (!_trackerRunning) {
+    //   _trackerRunning = true;
+    //   try {
+    //     _tracker?.restartAll();
+    //   } finally {}
+    // }
   }
 
   void _processTrackerPeerEvent(Tracker source, PeerEvent event) {
@@ -198,61 +196,24 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
-  void _processNewPeerFound(Uri url) {
-    var piecesNum = _metaInfo.pieces.length;
-    var id = _createPeerLocalId(url);
-    if (id == null || _peerIds.contains(id)) return;
-    _peerIds.add(id);
-    var p = TCPPeer(id, _peerId, url, _infoHashBuffer, piecesNum);
-    _connectPeer(p);
+  void _processNewPeerFound(CompactAddress url) {
+    _peersManager.addNewPeerAddress(url);
   }
 
-  void _processDHTPeer(InternetAddress address, int port, String infoHash) {
-    var uri = Uri(host: address.address, port: port);
-    _processNewPeerFound(uri);
-  }
-
-  String _createPeerLocalId(dynamic address) {
-    if (address is Uri) {
-      return '${address.host}';
+  void _processDHTPeer(CompactAddress peer, String infoHash) {
+    if (infoHash == _infoHashString) {
+      _processNewPeerFound(peer);
     }
-    if (address is Socket) {
-      return '${address.address.host}';
-    }
-    return null;
-  }
-
-  void _connectPeer(Peer p) {
-    if (p == null) return;
-    p.onDispose((source, [reason]) {
-      var peer = source as Peer;
-      var host = peer.address.host;
-      _peerIds.remove(p.id);
-      _cominIp.remove(host);
-    });
-    _peersManager.hookPeer(p);
   }
 
   void _hookInPeer(Socket socket) {
-    var id = _createPeerLocalId(socket);
-    if (_cominIp.length >= MAX_IN_PEERS) {
+    if (_cominIp.length >= MAX_IN_PEERS ||
+        !_cominIp.add(socket.address.address)) {
       socket.close();
       return;
     }
-    if (_cominIp.add(socket.address.host)) {
-      log('New come in peer : $id', name: runtimeType.toString());
-      var piecesNum = _metaInfo.pieces.length;
-      var p = TCPPeer(
-          id,
-          _peerId,
-          Uri(host: socket.address.host, port: socket.port),
-          _infoHashBuffer,
-          piecesNum,
-          socket);
-      _connectPeer(p);
-    } else {
-      socket.close();
-    }
+    _peersManager.addNewPeerAddress(
+        CompactAddress(socket.address, socket.port), PeerType.TCP, socket);
   }
 
   @override
@@ -291,29 +252,21 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     map['total_length'] = _metaInfo.length;
     // 主动访问的peer:
     _tracker.onPeerEvent(_processTrackerPeerEvent);
-    _tracker.onAllAnnounceOver(_whenTrackerOverOneturn);
     _peersManager.onAllComplete(_whenTaskDownloadComplete);
     _peersManager.onNoActivePeerEvent(_whenNoActivePeers);
-    _peersManager.onNewPeerFound(_processNewPeerFound);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
     _dht.announce(
         String.fromCharCodes(_metaInfo.infoHashBuffer), _serverSocket.port);
     _dht.onNewPeer(_processDHTPeer);
-
+    // ignore: unawaited_futures
     _dht.bootstrap();
+
     if (_fileManager.isAllComplete) {
-      _tracker.complete().catchError((e) async {
-        log('Try to complete tracker error :',
-            error: e, name: runtimeType.toString());
-        await dispose();
-      });
+      _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
+          event: EVENT_COMPLETED);
     } else {
-      _trackerRunning = true;
-      _tracker.start().catchError((e) async {
-        log('Try to complete tracker error :',
-            error: e, name: runtimeType.toString());
-        await dispose();
-      });
+      _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
+          event: EVENT_STARTED);
     }
     return map;
   }
@@ -337,9 +290,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _resumeHandlers.clear();
     _stopHandlers.clear();
     _tracker?.offPeerEvent(_processTrackerPeerEvent);
-    _tracker?.offAllAnnounceOver(_whenTrackerOverOneturn);
     _peersManager?.offAllComplete(_whenTaskDownloadComplete);
-    _peersManager?.offNewPeerFound(_processNewPeerFound);
     _fileManager?.offFileComplete(_whenFileDownloadComplete);
     // 这是有顺序的,先停止tracker运行,然后停止监听serversocket以及所有的peer,最后关闭文件系统
     await _tracker?.dispose();
@@ -437,12 +388,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     });
   }
 
-  void _fireTaskStop() {
-    _stopHandlers.forEach((element) {
-      Timer.run(() => element());
-    });
-  }
-
   @override
   int get downloaded => _fileManager?.downloaded;
 
@@ -468,7 +413,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  int get peersNumber {
+  int get allPeersNumber {
     if (_peersManager != null) {
       return _peersManager.peersNumber;
     } else {
@@ -479,5 +424,27 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   void addDHTNode(Uri url) {
     _dht?.addBootstrapNode(url);
+  }
+
+  @override
+  int get connectedPeersNumber {
+    if (_peersManager != null) {
+      return _peersManager.connectedPeersNumber;
+    } else {
+      return 0;
+    }
+  }
+
+  int get seederNumber {
+    if (_peersManager != null) {
+      return _peersManager.seederNumber;
+    } else {
+      return 0;
+    }
+  }
+
+  @override
+  void startAnnounceUrl(Uri url, Uint8List infoHash) {
+    _tracker?.runTracker(url, infoHash);
   }
 }

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:torrent_model/torrent_model.dart';
+import 'package:dartorrent_common/dartorrent_common.dart';
 
 import 'bitfield.dart';
 import 'peer.dart';
@@ -27,18 +27,18 @@ class PeersManager {
 
   bool get isDisposed => _disposed;
 
-  final Set<Peer> _peers = {};
+  final Set<Peer> _activePeers = {};
 
-  final Set<Uri> _lastUTPEX = {};
+  final Set<InternetAddress> _peersAddress = {};
 
-  String localExtenelIP;
+  final Set<CompactAddress> _lastUTPEX = {};
+
+  InternetAddress localExtenelIP;
 
   /// 写入磁盘的缓存最大值
   int maxWriteBufferSize;
 
   final _flushIndicesBuffer = <int>{};
-
-  final Set<void Function(Uri)> _newPeerFoundHandler = {};
 
   final Set<void Function()> _allcompletehandles = {};
 
@@ -50,11 +50,13 @@ class PeersManager {
 
   int _uploaded = 0;
 
+  int _downloaded = 0;
+
+  int _startedTime;
+
   int _uploadedNotifySize = 0;
 
   final List<List> _remoteRequest = [];
-
-  final Map<String, int> _remoteRequestCounts = {};
 
   final DownloadFileManager _fileManager;
 
@@ -72,8 +74,10 @@ class PeersManager {
 
   Timer _ut_pex_timer;
 
-  PeersManager(this._pieceManager, this._pieceProvider, this._fileManager,
-      this._metaInfo,
+  final String _localPeerId;
+
+  PeersManager(this._localPeerId, this._pieceManager, this._pieceProvider,
+      this._fileManager, this._metaInfo,
       [this.maxWriteBufferSize = MAX_WRITE_BUFFER_SIZE]) {
     assert(_pieceManager != null &&
         _pieceProvider != null &&
@@ -91,30 +95,40 @@ class PeersManager {
   bool get isPaused => _paused;
 
   int get peersNumber {
-    if (_peers == null || _peers.isEmpty) return 0;
-    return _peers.length;
+    if (_peersAddress == null || _peersAddress.isEmpty) return 0;
+    return _peersAddress.length;
+  }
+
+  int get connectedPeersNumber {
+    if (_activePeers == null || _activePeers.isEmpty) return 0;
+    return _activePeers.length;
+  }
+
+  int get seederNumber {
+    if (_activePeers == null || _activePeers.isEmpty) return 0;
+    var c = 0;
+    return _activePeers.fold(c, (previousValue, element) {
+      if (element.isSeeder) {
+        return previousValue + 1;
+      }
+      return previousValue;
+    });
   }
 
   double get downloadSpeed {
-    var s = 0.0;
-    if (_peers != null) {
-      s = _peers.fold(
-          0.0, (previousValue, peer) => previousValue + peer.downloadSpeed);
-    }
-    return s;
+    if (_startedTime == null) return 0.0;
+    var passed = DateTime.now().millisecondsSinceEpoch - _startedTime;
+    return _downloaded / passed;
   }
 
   double get uploadSpeed {
-    var s = 0.0;
-    if (_peers != null) {
-      s = _peers.fold(
-          0.0, (previousValue, peer) => previousValue + peer.uploadSpeed);
-    }
-    return s;
+    if (_startedTime == null) return 0.0;
+    var passed = DateTime.now().millisecondsSinceEpoch - _startedTime;
+    return _uploaded / passed;
   }
 
-  void hookPeer(Peer peer) {
-    if (peer.address.host == localExtenelIP) return;
+  void _hookPeer(Peer peer) {
+    if (peer.address.address == localExtenelIP) return;
     if (_peerExsist(peer)) return;
     peer.onDispose(_processPeerDispose);
     peer.onBitfield(_processBitfieldUpdate);
@@ -160,28 +174,38 @@ class PeersManager {
   }
 
   bool _peerExsist(Peer id) {
-    return _peers.contains(id);
+    return _activePeers.contains(id);
   }
 
   void _processExtendedMessage(dynamic source, String name, dynamic data) {
     if (name == 'ut_pex') {
       var added = data['added'] as List;
-      for (var i = 0; i < added.length; i += 6) {
-        var uri = parseAddress(added, i);
-        if (uri.host == localExtenelIP) continue;
-        print('获得一个PEX：$uri');
-        Timer.run(() => _fireNewPeerFound(uri));
-      }
+      CompactAddress.parseIPv4Addresses(added).forEach((address) {
+        Timer.run(() => addNewPeerAddress(address));
+      });
     }
     if (name == 'handshake') {
-      localExtenelIP = InternetAddress.fromRawAddress(data['yourip']).host;
+      if (data['yourip'] != null &&
+          (data['yourip'].length == 4 || data['yourip'].length == 16)) {
+        localExtenelIP = InternetAddress.fromRawAddress(data['yourip']);
+      }
+    }
+  }
+
+  void addNewPeerAddress(CompactAddress address,
+      [PeerType type = PeerType.TCP, Socket socket]) {
+    if (address == null) return;
+    if (_peersAddress.add(address.address)) {
+      var peer = Peer.newTCPPeer(_localPeerId, address,
+          _metaInfo.infoHashBuffer, _metaInfo.pieces.length, socket);
+      _hookPeer(peer);
     }
   }
 
   void _sendUt_pex_peers() {
-    var dropped = <Uri>[];
-    var added = <Uri>[];
-    _peers.forEach((p) {
+    var dropped = <CompactAddress>[];
+    var added = <CompactAddress>[];
+    _activePeers.forEach((p) {
       if (!_lastUTPEX.remove(p.address)) {
         added.add(p.address);
       }
@@ -195,30 +219,14 @@ class PeersManager {
     data['added'] = [];
     added.forEach((element) {
       _lastUTPEX.add(element);
-      var p = Uint8List(2);
-      ByteData.view(p.buffer).setUint16(0, element.port);
-      var ip = InternetAddress.tryParse(element.host);
-      if (ip != null) {
-        var b = <int>[];
-        b.addAll(ip.rawAddress);
-        b.addAll(p);
-        data['added'].addAll(b);
-      }
+      data['added'].addAll(element.toBytes());
     });
     data['dropped'] = [];
     dropped.forEach((element) {
-      var p = Uint8List(2);
-      ByteData.view(p.buffer).setUint16(0, element.port);
-      var ip = InternetAddress.tryParse(element.host);
-      if (ip != null) {
-        var b = <int>[];
-        b.addAll(ip.rawAddress);
-        b.addAll(p);
-        data['dropped'].addAll(b);
-      }
+      data['dropped'].addAll(element.toBytes());
     });
     if (data['added'].isEmpty && data['dropped'].isEmpty) return;
-    _peers.forEach((peer) {
+    _activePeers.forEach((peer) {
       peer.sendExtendMessage('ut_pex', data);
     });
   }
@@ -230,7 +238,7 @@ class PeersManager {
   void _processPieceWriteComplete(int index) async {
     if (_fileManager.localHave(index)) return;
     await _fileManager.updateBitfield(index);
-    _peers.forEach((peer) {
+    _activePeers.forEach((peer) {
       // if (!peer.remoteHave(index)) {
       peer.sendHave(index);
       // }
@@ -270,20 +278,6 @@ class PeersManager {
     return _allcompletehandles.remove(h);
   }
 
-  bool onNewPeerFound(void Function(Uri uri) h) {
-    return _newPeerFoundHandler.add(h);
-  }
-
-  bool offNewPeerFound(void Function(Uri uri) h) {
-    return _newPeerFoundHandler.remove(h);
-  }
-
-  void _fireNewPeerFound(Uri uri) {
-    _newPeerFoundHandler.forEach((element) {
-      element(uri);
-    });
-  }
-
   void readSubPieceComplete(int pieceIndex, int begin, List<int> block) {
     var dindex = [];
     for (var i = 0; i < _remoteRequest.length; i++) {
@@ -291,7 +285,6 @@ class PeersManager {
       if (request[0] == pieceIndex && request[1] == begin) {
         dindex.add(i);
         var peer = request[2] as Peer;
-        _remoteRequestCounts[peer.id]--;
         if (peer != null && !peer.isDisposed) {
           if (peer.sendPiece(pieceIndex, begin, block)) {
             _uploaded += block.length;
@@ -332,10 +325,13 @@ class PeersManager {
 
   void _processPeerDispose(dynamic source, [dynamic reason]) {
     var peer = source as Peer;
-    var bufferRequests = peer.requestBuffer;
-    // log('Peer已销毁, ${peer.address},退还收到未收到Request:$bufferRequests,将其删除',
-    //     error: reason, name: runtimeType.toString());
+    var reconnect = true;
+    if (reason is BadException) {
+      reconnect = false;
+    }
+    _activePeers.remove(peer);
 
+    var bufferRequests = peer.requestBuffer;
     bufferRequests.forEach((element) {
       var pindex = element[0];
       var begin = element[1];
@@ -349,9 +345,7 @@ class PeersManager {
     completedPieces.forEach((index) {
       _pieceProvider[index]?.removeAvalidatePeer(peer.id);
     });
-    _peers.remove(peer);
     _pausedRemoteRequest.remove(peer.id);
-    _remoteRequestCounts.remove(peer.id);
     var tempIndex = [];
     for (var i = 0; i < _pausedRequest.length; i++) {
       var pr = _pausedRequest[i];
@@ -362,19 +356,24 @@ class PeersManager {
     tempIndex.forEach((index) {
       _pausedRequest.removeAt(index);
     });
-    if (_peers.isEmpty) {
-      _fireNoActivePeer();
+    if (reconnect && _activePeers.length < MAX_ACTIVE_PEERS) {
+      print(
+          '准备重新连接 ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${peer.downloadSpeed}),UL:${peer.uploaded}(${peer.uploadSpeed})');
+      addNewPeerAddress(peer.address, peer.type);
     }
   }
 
+  @Deprecated('useless')
   bool onNoActivePeerEvent(Function k) {
     return _noActivePeerhandles.add(k);
   }
 
+  @Deprecated('useless')
   bool offNoActivePeerEvent(Function k) {
     return _noActivePeerhandles.remove(k);
   }
 
+  @Deprecated('useless')
   void _fireNoActivePeer() {
     _noActivePeerhandles.forEach((element) {
       Timer.run(() => element());
@@ -382,9 +381,10 @@ class PeersManager {
   }
 
   void _peerConnected(dynamic source) {
+    _startedTime ??= DateTime.now().millisecondsSinceEpoch;
     var peer = source as Peer;
     log('${peer.address} is connected', name: runtimeType.toString());
-    _peers.add(peer);
+    _activePeers.add(peer);
     peer.sendHandShake();
   }
 
@@ -431,11 +431,12 @@ class PeersManager {
       dynamic source, int index, int begin, List<int> block) {
     var peer = source as Peer;
     var rindex = -1;
+    _downloaded += block.length;
     for (var i = 0; i < _timeoutRequest.length; i++) {
       var tr = _timeoutRequest[i];
       if (tr[0] == index && tr[1] == begin && tr[2] == block.length) {
-        log('超时Request[$index,$begin]已从${peer.address}获得，当前超时Request:$_timeoutRequest',
-            name: runtimeType.toString());
+        // log('超时Request[$index,$begin]已从${peer.address}获得，当前超时Request:$_timeoutRequest',
+        //     name: runtimeType.toString());
         rindex = i;
         break;
       }
@@ -461,11 +462,8 @@ class PeersManager {
   void _processRemoteRequest(dynamic source, int index, int begin, int length) {
     if (isPaused) {
       var peer = source as Peer;
+      _pausedRemoteRequest[peer.id] ??= [];
       var pausedRequest = _pausedRemoteRequest[peer.id];
-      if (pausedRequest == null) {
-        pausedRequest = [];
-        _pausedRemoteRequest[peer.id] = pausedRequest;
-      }
       if (pausedRequest.length <= 6) {
         pausedRequest.add([source, index, begin, length]);
       } else {
@@ -474,13 +472,6 @@ class PeersManager {
       return;
     }
     var peer = source as Peer;
-    var count = _remoteRequestCounts[peer.id];
-    if (count == null) _remoteRequestCounts[peer.id] = 0;
-    if (_remoteRequestCounts[peer.id] >= 6) {
-      peer.dispose('too many requests');
-      return;
-    }
-    _remoteRequestCounts[peer.id]++;
     _remoteRequest.add([index, begin, peer]);
     _fileManager.readFile(index, begin, length);
   }
@@ -552,8 +543,8 @@ class PeersManager {
     var peer = source as Peer;
     // 如果超时，不会重新请求，等待。实在不来会在销毁peer的时候释放所有它对应的请求
     _addTimeoutRequest(index, begin, length, source);
-    log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
-        name: runtimeType.toString());
+    // log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
+    //     name: runtimeType.toString());
     // if (_pieceProvider[index] != null &&
     //     _pieceProvider[index].haveAvalidateSubPiece()) {
     //   _requestPieces(peer, index);
@@ -591,7 +582,7 @@ class PeersManager {
   }
 
   void _sendKeepAliveToAll() {
-    _peers?.forEach((peer) {
+    _activePeers?.forEach((peer) {
       Timer.run(() => _keepAlive(peer));
     });
   }
@@ -634,7 +625,7 @@ class PeersManager {
   }
 
   Future disposeAllSeeder([dynamic reason]) async {
-    _peers?.forEach((peer) async {
+    _activePeers?.forEach((peer) async {
       if (peer.isSeeder) {
         await peer.dispose(reason);
       }
@@ -659,10 +650,8 @@ class PeersManager {
     _noActivePeerhandles?.clear();
     _timeoutRequest?.clear();
     _remoteRequest?.clear();
-    _pausedRequest.clear();
-    _pausedRemoteRequest.clear();
-    _remoteRequestCounts.clear();
-    _newPeerFoundHandler.clear();
+    _pausedRequest?.clear();
+    _pausedRemoteRequest?.clear();
     Function _disposePeers = (Set<Peer> peers) async {
       if (peers != null && peers.isNotEmpty) {
         for (var i = 0; i < peers.length; i++) {
@@ -673,7 +662,7 @@ class PeersManager {
       }
       peers.clear();
     };
-    await _disposePeers(_peers);
+    await _disposePeers(_activePeers);
 
     _timeoutRequest.clear();
   }

@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dartorrent_common/dartorrent_common.dart';
 import 'package:test/test.dart';
-import 'package:torrent_task/src/peer/tcp_peer.dart';
 import 'package:torrent_task/torrent_task.dart';
 
 void main() {
@@ -39,10 +39,9 @@ void main() {
       serverPort = serverSocket.port;
       serverSocket.listen((socket) {
         print('client connected : ${socket.address}:${socket.port}');
-        var peer = TCPPeer(
-            'id1',
+        var peer = Peer.newTCPPeer(
             generatePeerId(),
-            Uri(host: socket.address.host, port: socket.port),
+            CompactAddress(socket.address, socket.port),
             infoBuffer,
             piecesNum,
             socket);
@@ -116,6 +115,7 @@ void main() {
           var id = String.fromCharCodes(block.getRange(2, 22));
           assert(id == peer.remotePeerId);
           if (index == 4) {
+            print('测试完毕 $callMap');
             await peer.dispose('测试完成');
           }
         });
@@ -130,8 +130,12 @@ void main() {
 
     test('regular communicate', () {
       var pid = generatePeerId();
-      var peer = TCPPeer('id', pid, Uri(host: '127.0.0.1', port: serverPort),
-          infoBuffer, piecesNum);
+      var peer = Peer.newTCPPeer(
+          pid,
+          CompactAddress(InternetAddress.tryParse('127.0.0.1'), serverPort),
+          infoBuffer,
+          piecesNum,
+          null);
       peer.onConnect((peer) {
         callMap['connect2'] = true;
         print('connect');

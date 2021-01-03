@@ -6,6 +6,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:bencode_dart/bencode_dart.dart';
 import 'package:torrent_task/src/peer/extended_proccessor.dart';
+import 'package:dartorrent_common/dartorrent_common.dart';
 
 import '../utils.dart';
 import 'bitfield.dart';
@@ -54,6 +55,8 @@ const OP_SUGGEST_PIECE = 0x0d;
 const OP_REJECT_REQUEST = 0x10;
 const OP_ALLOW_FAST = 0x11;
 
+enum PeerType { TCP, uTP }
+
 /// 30 Seconds
 const DEFAULT_CONNECT_TIMEOUT = 30;
 
@@ -71,6 +74,10 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// this class will invoke close.
   /// 单位:秒
   int countdownTime = 150;
+
+  String get id {
+    return address?.toContactEncodingString();
+  }
 
   /// 下载项目的piece总数
   final int _piecesNum;
@@ -101,7 +108,7 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   dynamic _disposeReason;
 
   /// 远程Peer的地址和端口
-  final Uri address;
+  final CompactAddress address;
 
   /// Torrent infohash buffer
   final List<int> _infoHashBuffer;
@@ -141,9 +148,6 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// single request timeout time, 30 seconds
   static const REQUEST_TIME_OUT = 30;
 
-  /// Peer id。不同于bt协议中的peer id，这个id仅是客户端用于区分peer使用
-  final String _id;
-
   int _downloaded = 0;
 
   int _uploaded = 0;
@@ -177,16 +181,31 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// 远程发送的Suggest pieces
   final Set<int> _remoteSuggestPieces = <int>{};
 
+  final PeerType type;
+
   ///
   /// [_id] 是用于区分不同Peer的Id，和[_localPeerId]不同，[_localPeerId]是bt协议中的Peer_id。
   /// [address]是远程peer的地址和端口，子类在实现的时候可以利用该值进行远程连接。[_infoHashBuffer]
   /// 是torrent文件中的infohash值，[_piecesNum]是下载项目的总piece数目，用于构建远程`Bitfield`数据
   /// 使用。可选项[localEnableFastPeer]默认位`true`，表示本地是否开启[Fast Extension(BEP 0006)](http://www.bittorrent.org/beps/bep_0006.html),
   /// [localEnableExtended]表示本地是否可以使用[Extension Protocol](http://www.bittorrent.org/beps/bep_0010.html)
-  Peer(this._id, this._localPeerId, this.address, this._infoHashBuffer,
-      this._piecesNum,
-      {this.localEnableFastPeer = true, this.localEnableExtended = true}) {
+  Peer(this._localPeerId, this.address, this._infoHashBuffer, this._piecesNum,
+      {this.type = PeerType.TCP,
+      this.localEnableFastPeer = true,
+      this.localEnableExtended = true}) {
     _remoteBitfield = Bitfield.createEmptyBitfield(_piecesNum);
+  }
+
+  factory Peer.newTCPPeer(String localPeerId, CompactAddress address,
+      List<int> infoHashBuffer, int piecesNum, Socket socket,
+      {bool enableExtend = true, bool enableFast = true}) {
+    return _TCPPeer(localPeerId, address, infoHashBuffer, piecesNum, socket,
+        enableExtend: enableExtend, enableFast: enableFast);
+  }
+
+  factory Peer.newUTPPeer() {
+    // TODO IMPLEMENT THIS!
+    throw '还没实现';
   }
 
   /// 远程的Bitfield
@@ -221,8 +240,6 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   List<List<int>> get requestBuffer => _requestBuffer;
 
   Set<int> get remoteSuggestPieces => _remoteSuggestPieces;
-
-  String get id => _id;
 
   bool get isDisposed => _disposed;
 
@@ -261,14 +278,14 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
       var _stream = await connectRemote(timeout);
       _streamChunk = _stream.listen(_processReceiveData, onDone: () {
         _log('Connection is closed $address');
-        dispose('远程/本地关闭了连接');
+        dispose(BadException('远程关闭了连接'));
       }, onError: (e) {
-        _log('Error happen: $address');
+        _log('Error happen: $address', e);
         dispose(e);
       });
       fireConnectEvent();
     } catch (e) {
-      return dispose(e);
+      return dispose(BadException(e));
     }
   }
 
@@ -602,13 +619,20 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// However, consider that it can take several seconds for buffers to drain and messages to propagate once a peer is choked.
   void _processRemoteRequest(List<int> message, [int offset = 1]) {
     if (_remoteRequestBuffer.length >= MAX_REQUEST_COUNT) {
-      dispose('Too many requests from ${address}');
+      dispose(BadException('Too many requests from ${address}'));
       return;
     }
     var view = ByteData.view(Uint8List.fromList(message).buffer);
     var index = view.getUint32(offset);
     var begin = view.getUint32(offset + 4);
     var length = view.getUint32(offset + 8);
+    if (length > MAX_REQUEST_LENGTH) {
+      dev.log('TOO LARGEt BLOCK',
+          error: 'BLOCK $length', name: runtimeType.toString());
+      dispose(BadException(
+          '${address} : request block length larger than limit : $length > $MAX_REQUEST_LENGTH'));
+      return;
+    }
     for (var i = 0; i < _remoteRequestBuffer.length; i++) {
       var re = _remoteRequestBuffer[i];
       if (re[0] == index && re[1] == begin && re[2] == length) return;
@@ -620,7 +644,8 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
         fireRequest(index, begin, length);
         return;
       } else {
-        sendRejectRequest(index, begin, length);
+        // choke对方我不需要应答
+        // sendRejectRequest(index, begin, length);
         return;
       }
     }
@@ -673,8 +698,16 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     var fast = reseverd.elementAt(7) & 0x04;
     remoteEnableFastPeer = (fast == 0x04);
     var extented = reseverd.elementAt(5);
-    var enableExtented = ((extented & 0x10) == 0x10);
+    remoteEnableExtended = ((extented & 0x10) == 0x10);
+    _sendExtendedHandshake();
     fireHandshakeEvent(_remotePeerId, data);
+  }
+
+  void _sendExtendedHandshake() {
+    if (localEnableExtended && remoteEnableExtended) {
+      var m = _createExtenedHandshakeMessage();
+      sendMessage(ID_EXTENDED, m);
+    }
   }
 
   String _parseRemotePeerId(dynamic data) {
@@ -746,10 +779,6 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     message.addAll(_infoHashBuffer);
     message.addAll(utf8.encode(_localPeerId));
     sendByteMessage(message);
-    if (localEnableExtended) {
-      var m = _createExtenedHandshakeMessage();
-      sendMessage(ID_EXTENDED, m);
-    }
     _startToCountdown();
     _handShaked = true;
   }
@@ -758,14 +787,10 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     var message = <int>[];
     message.add(0);
     var d = <String, dynamic>{};
-    var rip = InternetAddress.tryParse(address.host);
-    if (rip != null) {
-      d['yourip'] = rip.rawAddress;
-    }
+    d['yourip'] = address.address.rawAddress;
     d['v'] = 'Dart BT v0.1.0';
     d['m'] = localExtened;
     var m = encode(d);
-    var test = decode(m);
     message.addAll(m);
     return message;
   }
@@ -780,6 +805,9 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   void sendKeeplive() {
     sendMessage(null);
   }
+
+  // TODO test:
+  int _lastSendTime;
 
   /// `piece: <len=0009+X><id=7><index><begin><block>`
   ///
@@ -815,14 +843,21 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     bytes.addAll(messageHead);
     bytes.addAll(block);
     sendMessage(ID_PIECE, bytes);
-    _uploaded += bytes.length;
-    var s = bytes.length / DateTime.now().millisecondsSinceEpoch - request[3];
-    if (_uploadSpeed == 0) {
-      _uploadSpeed = s;
+    if (_lastSendTime == null) {
+      _lastSendTime = request[3];
     } else {
-      _uploadSpeed += s;
-      _uploadSpeed = _uploadSpeed / 2;
+      var passed = DateTime.now().millisecondsSinceEpoch - _lastSendTime;
+      _lastSendTime = request[3];
+      var _currentSpeed = bytes.length / passed;
+      if (_uploadSpeed == 0.0) {
+        _uploadSpeed = _currentSpeed;
+      } else {
+        _uploadSpeed += _currentSpeed;
+        _uploadSpeed = _downloadSpeed / 2;
+      }
     }
+
+    _uploaded += bytes.length;
     return true;
   }
 
@@ -1082,17 +1117,60 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   }
 
   @override
-  int get hashCode => _id.hashCode;
+  int get hashCode => address.address.address.hashCode;
 
   @override
   bool operator ==(b) {
     if (b is Peer) {
-      return b.id == _id;
+      return b.address.address.address == address.address.address;
     }
     return false;
   }
 }
 
-class TimeoutException implements Exception {}
+class BadException implements Exception {
+  final dynamic e;
+  BadException(this.e);
+  @override
+  String toString() {
+    return '不需重连错误 : $e';
+  }
+}
 
-class RemoteCloseException implements Exception {}
+class _TCPPeer extends Peer {
+  Socket _socket;
+  _TCPPeer(String localPeerId, CompactAddress address, List<int> infoHashBuffer,
+      int piecesNum, this._socket,
+      {bool enableExtend = true, bool enableFast = true})
+      : super(localPeerId, address, infoHashBuffer, piecesNum,
+            type: PeerType.TCP,
+            localEnableExtended: enableExtend,
+            localEnableFastPeer: enableFast);
+
+  @override
+  Future<Stream> connectRemote(int timeout) async {
+    timeout ??= 30;
+    _socket ??= await Socket.connect(address.address, address.port,
+        timeout: Duration(seconds: timeout));
+    return _socket;
+  }
+
+  @override
+  void sendByteMessage(List<int> bytes) {
+    try {
+      _socket?.add(bytes);
+    } catch (e) {
+      dispose(e);
+    }
+  }
+
+  @override
+  Future dispose([reason]) async {
+    try {
+      await _socket?.close();
+      _socket = null;
+    } finally {
+      return super.dispose(reason);
+    }
+  }
+}
