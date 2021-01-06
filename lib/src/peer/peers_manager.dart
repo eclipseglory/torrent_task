@@ -29,7 +29,9 @@ class PeersManager {
 
   final Set<Peer> _activePeers = {};
 
-  final Set<InternetAddress> _peersAddress = {};
+  final Set<CompactAddress> _peersAddress = {};
+
+  final Set<InternetAddress> _comeinAddress = {};
 
   final Set<CompactAddress> _lastUTPEX = {};
 
@@ -53,6 +55,8 @@ class PeersManager {
   int _downloaded = 0;
 
   int _startedTime;
+
+  int _endTime;
 
   int _uploadedNotifySize = 0;
 
@@ -115,16 +119,35 @@ class PeersManager {
     });
   }
 
-  double get downloadSpeed {
-    if (_startedTime == null) return 0.0;
+  int get liveTime {
+    if (_startedTime == null) return 0;
     var passed = DateTime.now().millisecondsSinceEpoch - _startedTime;
-    return _downloaded / passed;
+    if (_endTime != null) {
+      passed = _endTime - _startedTime;
+    }
+    return passed;
+  }
+
+  double get downloadSpeed {
+    var live = liveTime;
+    if (live == 0) return 0.0;
+    return _downloaded / live;
   }
 
   double get uploadSpeed {
-    if (_startedTime == null) return 0.0;
-    var passed = DateTime.now().millisecondsSinceEpoch - _startedTime;
-    return _uploaded / passed;
+    var live = liveTime;
+    if (live == 0) return 0.0;
+    return _uploaded / live;
+  }
+
+  double get downloadSpeed2 {
+    if (_activePeers == null || _activePeers.isEmpty) return 0.0;
+    return _activePeers.fold(0.0, (p, element) => p + element.downloadSpeed);
+  }
+
+  double get uploadSpeed2 {
+    if (_activePeers == null || _activePeers.isEmpty) return 0.0;
+    return _activePeers.fold(0.0, (p, element) => p + element.uploadSpeed);
   }
 
   void _hookPeer(Peer peer) {
@@ -142,6 +165,7 @@ class PeersManager {
     peer.onPiece(_processReceivePiece);
     peer.onRequest(_processRemoteRequest);
     peer.onRequestTimeout(_processRequestTimeout);
+    peer.onSuggestPiece(_processSuggestPiece);
     peer.onRejectRequest(_processRejectRequest);
     peer.onAllowFast(_processAllowFast);
     peer.onExtendedEvent(_processExtendedMessage);
@@ -177,12 +201,50 @@ class PeersManager {
     return _activePeers.contains(id);
   }
 
+  List<CompactAddress> _parsePEXData(var added,
+      [InternetAddressType type = InternetAddressType.IPv4]) {
+    if (added != null && added is List && added.isNotEmpty) {
+      var intList;
+      if (added is! List<int>) {
+        intList = <int>[];
+        for (var i = 0; i < added.length; i++) {
+          var n = added[i];
+          if (n is int && n >= 0 && n < 256) {
+            intList.add(n);
+          } else {
+            return null;
+          }
+        }
+        added = intList;
+      }
+      if (type == InternetAddressType.IPv4) {
+        return CompactAddress.parseIPv4Addresses(added);
+      }
+      if (type == InternetAddressType.IPv6) {
+        return CompactAddress.parseIPv6Addresses(added);
+      }
+    }
+    return null;
+  }
+
   void _processExtendedMessage(dynamic source, String name, dynamic data) {
     if (name == 'ut_pex') {
-      var added = data['added'] as List;
-      CompactAddress.parseIPv4Addresses(added).forEach((address) {
-        Timer.run(() => addNewPeerAddress(address));
-      });
+      try {
+        var cas = _parsePEXData(data['added']);
+        if (cas != null) {
+          cas.forEach((address) {
+            Timer.run(() => addNewPeerAddress(address));
+          });
+        }
+        cas = _parsePEXData(data['added6'], InternetAddressType.IPv6);
+        if (cas != null) {
+          cas.forEach((address) {
+            Timer.run(() => addNewPeerAddress(address));
+          });
+        }
+      } catch (e) {
+        log('parse pex ips error', error: e, name: runtimeType.toString());
+      }
     }
     if (name == 'handshake') {
       if (data['yourip'] != null &&
@@ -195,7 +257,13 @@ class PeersManager {
   void addNewPeerAddress(CompactAddress address,
       [PeerType type = PeerType.TCP, Socket socket]) {
     if (address == null) return;
-    if (_peersAddress.add(address.address)) {
+    if (socket != null) {
+      // 说明是主动连接的peer,目前只允许一个ip连一次
+      if (!_comeinAddress.add(address.address)) {
+        return;
+      }
+    }
+    if (_peersAddress.add(address)) {
       var peer = Peer.newTCPPeer(_localPeerId, address,
           _metaInfo.infoHashBuffer, _metaInfo.pieces.length, socket);
       _hookPeer(peer);
@@ -329,6 +397,8 @@ class PeersManager {
     if (reason is BadException) {
       reconnect = false;
     }
+    _peersAddress.remove(peer.address);
+    _comeinAddress.remove(peer.address.address);
     _activePeers.remove(peer);
 
     var bufferRequests = peer.requestBuffer;
@@ -356,32 +426,24 @@ class PeersManager {
     tempIndex.forEach((index) {
       _pausedRequest.removeAt(index);
     });
-    if (reconnect && _activePeers.length < MAX_ACTIVE_PEERS) {
-      print(
-          '准备重新连接 ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${peer.downloadSpeed}),UL:${peer.uploaded}(${peer.uploadSpeed})');
-      addNewPeerAddress(peer.address, peer.type);
+    if (reconnect) {
+      if (_activePeers.length < MAX_ACTIVE_PEERS && !isDisposed) {
+        print(
+            '准备重新连接 ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
+        addNewPeerAddress(peer.address, peer.type);
+      }
+    } else {
+      if (peer.isSeeder && !_fileManager.isAllComplete && !isDisposed) {
+        print(
+            '准备重新连接Seeder ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
+        addNewPeerAddress(peer.address, peer.type);
+      }
     }
-  }
-
-  @Deprecated('useless')
-  bool onNoActivePeerEvent(Function k) {
-    return _noActivePeerhandles.add(k);
-  }
-
-  @Deprecated('useless')
-  bool offNoActivePeerEvent(Function k) {
-    return _noActivePeerhandles.remove(k);
-  }
-
-  @Deprecated('useless')
-  void _fireNoActivePeer() {
-    _noActivePeerhandles.forEach((element) {
-      Timer.run(() => element());
-    });
   }
 
   void _peerConnected(dynamic source) {
     _startedTime ??= DateTime.now().millisecondsSinceEpoch;
+    _endTime = null;
     var peer = source as Peer;
     log('${peer.address} is connected', name: runtimeType.toString());
     _activePeers.add(peer);
@@ -456,6 +518,7 @@ class PeersManager {
 
   void _processPeerHandshake(dynamic source, String remotePeerId, data) {
     var peer = source as Peer;
+    log('$remotePeerId handshake', name: runtimeType.toString());
     peer.sendBitfield(_fileManager.localBitfield);
   }
 
@@ -489,6 +552,10 @@ class PeersManager {
     var peer = source as Peer;
     if (bitfield != null) {
       if (peer.interestedRemote) return;
+      if (_fileManager.isAllComplete && peer.isSeeder) {
+        peer.dispose(BadException('已经下载完成不再连接Seeder'));
+        return;
+      }
       for (var i = 0; i < _fileManager.piecesNumber; i++) {
         if (bitfield.getBit(i)) {
           if (!peer.interestedRemote && !_fileManager.localHave(i)) {
@@ -498,7 +565,6 @@ class PeersManager {
         }
       }
     }
-    log('${peer.address} 没有我要的资源 $bitfield，发送 not interested');
     peer.sendInterested(false);
   }
 
@@ -540,7 +606,6 @@ class PeersManager {
 
   void _processRequestTimeout(
       dynamic source, int index, int begin, int length) {
-    var peer = source as Peer;
     // 如果超时，不会重新请求，等待。实在不来会在销毁peer的时候释放所有它对应的请求
     _addTimeoutRequest(index, begin, length, source);
     // log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
@@ -636,6 +701,9 @@ class PeersManager {
   Future dispose() async {
     if (isDisposed) return;
     _disposed = true;
+
+    _endTime = DateTime.now().millisecondsSinceEpoch;
+
     _ut_pex_timer?.cancel();
     _ut_pex_timer = null;
 

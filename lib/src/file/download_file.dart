@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 
-import 'package:torrent_task/src/file/file_base.dart';
-
 const READ = 'read';
 const FLUSH = 'flush';
 const WRITE = 'write';

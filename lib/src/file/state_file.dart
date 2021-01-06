@@ -109,37 +109,6 @@ class StateFile {
     return completer.future;
   }
 
-  @Deprecated('dont use this method , I dont test it')
-  Future<void> _updateAll(event) async {
-    List<int> indices = event['indices'];
-    int uploaded = event['uploaded'];
-    List<bool> haves = event['have'];
-    Completer c = event['completer'];
-    for (var i = 0; i < indices.length; i++) {
-      if (haves == null) {
-        _bitfield.setBit(indices[i], true);
-      } else {
-        _bitfield.setBit(indices[i], haves[i]);
-      }
-    }
-    _uploaded = uploaded;
-    try {
-      var access = await getAccess();
-      await access.setPosition(0);
-      await access.writeFrom(_bitfield.buffer);
-      await access.setPosition(_bitfield.buffer.length);
-      var data = Uint8List(8);
-      var d = ByteData.view(data.buffer);
-      d.setUint64(0, uploaded);
-      access = await access.writeFrom(data);
-      await access.flush();
-      c.complete(true);
-    } catch (e) {
-      c.complete(false);
-    }
-    return;
-  }
-
   Future<void> _update(event) async {
     int index = event['index'];
     int uploaded = event['uploaded'];

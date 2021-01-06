@@ -1,8 +1,5 @@
 import 'dart:async';
 
-import 'package:torrent_model/torrent_model.dart';
-import 'package:torrent_task/src/task.dart';
-import 'package:torrent_task/src/utils.dart';
 
 Future<void> main() async {
   // var model = await Torrent.parse('example/test8.torrent');

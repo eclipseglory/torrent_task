@@ -12,3 +12,7 @@
 - Add PEX support
 - Change Tracker
 - Fix some bugs
+
+## 0.1.2
+- Support peer reconnect
+- Fix some bugs

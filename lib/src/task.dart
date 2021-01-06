@@ -35,6 +35,10 @@ abstract class TorrentTask {
 
   double get uploadSpeed;
 
+  double get downloadSpeed2;
+
+  double get uploadSpeed2;
+
   /// Downloaded total bytes length
   int get downloaded;
 
@@ -146,7 +150,27 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
+  @override
+  double get downloadSpeed2 {
+    if (_peersManager != null) {
+      return _peersManager.downloadSpeed2;
+    } else {
+      return 0.0;
+    }
+  }
+
+  @override
+  double get uploadSpeed2 {
+    if (_peersManager != null) {
+      return _peersManager.uploadSpeed2;
+    } else {
+      return 0.0;
+    }
+  }
+
   String _infoHashString;
+
+  Timer _dhtRepeatTimer;
 
   Future<PeersManager> _init(Torrent model, String savePath) async {
     _dht = DHT();
@@ -176,18 +200,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _fireFileComplete(filePath);
   }
 
-  @Deprecated('useless')
-  void _whenNoActivePeers() {
-    // if (_fileManager != null && _fileManager.isAllComplete) return;
-    // if (!_trackerRunning) {
-    //   _trackerRunning = true;
-    //   try {
-    //     _tracker?.restartAll();
-    //   } finally {}
-    // }
-  }
-
   void _processTrackerPeerEvent(Tracker source, PeerEvent event) {
+    if (event == null) return;
     var ps = event.peers;
     if (ps != null && ps.isNotEmpty) {
       ps.forEach((url) {
@@ -253,14 +267,16 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     // 主动访问的peer:
     _tracker.onPeerEvent(_processTrackerPeerEvent);
     _peersManager.onAllComplete(_whenTaskDownloadComplete);
-    _peersManager.onNoActivePeerEvent(_whenNoActivePeers);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
     _dht.announce(
         String.fromCharCodes(_metaInfo.infoHashBuffer), _serverSocket.port);
     _dht.onNewPeer(_processDHTPeer);
     // ignore: unawaited_futures
     _dht.bootstrap();
-
+    // TEST:
+    _dhtRepeatTimer = Timer.periodic(Duration(seconds: 60), (timer) {
+      _dht.requestPeers(String.fromCharCodes(_metaInfo.infoHashBuffer));
+    });
     if (_fileManager.isAllComplete) {
       _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
           event: EVENT_COMPLETED);
@@ -273,7 +289,12 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   @override
   Future stop([bool force = false]) async {
-    await _tracker?.stop(force);
+    try {
+      // TODO fix this bug
+      await _tracker?.stop(force);
+    } catch (e) {
+      // do nothing
+    }
     var tempHandler = Set<Function>.from(_stopHandlers);
     await dispose();
     tempHandler.forEach((element) {
@@ -284,6 +305,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   Future dispose() async {
+    _dhtRepeatTimer?.cancel();
+    _dhtRepeatTimer = null;
     _fileCompleteHandlers.clear();
     _taskCompleteHandlers.clear();
     _pauseHandlers.clear();
@@ -435,6 +458,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
+  @override
   int get seederNumber {
     if (_peersManager != null) {
       return _peersManager.seederNumber;
