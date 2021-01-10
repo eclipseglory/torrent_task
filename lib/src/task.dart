@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -22,7 +23,6 @@ abstract class TorrentTask {
   factory TorrentTask.newTask(Torrent metaInfo, String savePath) {
     return _TorrentTask(metaInfo, savePath);
   }
-
   void startAnnounceUrl(Uri url, Uint8List infoHash);
 
   int get allPeersNumber;
@@ -31,13 +31,17 @@ abstract class TorrentTask {
 
   int get seederNumber;
 
+  /// Current download speed
   double get downloadSpeed;
 
+  /// Current upload speed
   double get uploadSpeed;
 
-  double get downloadSpeed2;
+  /// Average download speed
+  double get averageDownloadSpeed;
 
-  double get uploadSpeed2;
+  /// Average upload speed
+  double get averageUploadSpeed;
 
   /// Downloaded total bytes length
   int get downloaded;
@@ -45,19 +49,21 @@ abstract class TorrentTask {
   /// Downloaded percent
   double get progress;
 
+  /// Start to download
   Future start();
 
+  /// Stop this task
   Future stop();
 
   bool get isPaused;
 
+  /// Pause task
   void pause();
 
+  /// Resume task
   void resume();
 
-  // Future deleteTask();
-
-  // Future deleteTaskAndFiles();
+  void requestPeersFromDHT();
 
   bool onTaskComplete(void Function() handler);
 
@@ -84,14 +90,14 @@ abstract class TorrentTask {
   /// 当然也可以直接添加已知的node地址
   void addDHTNode(Uri uri);
 
-  @Deprecated('This method is just for debug')
-  void addPeer(Uri peer, [Uri trackerHost]);
-
-  @Deprecated('This property is just for debug')
-  TorrentAnnounceTracker get tracker;
+  /// 添加已知的Peer地址
+  void addPeer(CompactAddress address);
 }
 
 class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
+  static InternetAddress LOCAL_ADDRESS =
+      InternetAddress.fromRawAddress(Uint8List.fromList([127, 0, 0, 1]));
+
   final Set<void Function()> _taskCompleteHandlers = {};
 
   final Set<void Function(String filePath)> _fileCompleteHandlers = {};
@@ -124,12 +130,30 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   ServerSocket _serverSocket;
 
-  final Set<String> _cominIp = {};
+  final Set<InternetAddress> _cominIp = {};
 
   bool _paused = false;
 
   _TorrentTask(this._metaInfo, this._savePath) {
     _peerId = generatePeerId();
+  }
+
+  @override
+  double get averageDownloadSpeed {
+    if (_peersManager != null) {
+      return _peersManager.averageDownloadSpeed;
+    } else {
+      return 0.0;
+    }
+  }
+
+  @override
+  double get averageUploadSpeed {
+    if (_peersManager != null) {
+      return _peersManager.averageUploadSpeed;
+    } else {
+      return 0.0;
+    }
   }
 
   @override
@@ -145,24 +169,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   double get uploadSpeed {
     if (_peersManager != null) {
       return _peersManager.uploadSpeed;
-    } else {
-      return 0.0;
-    }
-  }
-
-  @override
-  double get downloadSpeed2 {
-    if (_peersManager != null) {
-      return _peersManager.downloadSpeed2;
-    } else {
-      return 0.0;
-    }
-  }
-
-  @override
-  double get uploadSpeed2 {
-    if (_peersManager != null) {
-      return _peersManager.uploadSpeed2;
     } else {
       return 0.0;
     }
@@ -187,7 +193,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  void addPeer(Uri peer, [Uri trackerHost]) {}
+  void addPeer(CompactAddress address) {
+    _peersManager.addNewPeerAddress(address);
+  }
 
   void _whenTaskDownloadComplete() async {
     await _peersManager.disposeAllSeeder('Download complete,disconnect seeder');
@@ -221,11 +229,16 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   void _hookInPeer(Socket socket) {
-    if (_cominIp.length >= MAX_IN_PEERS ||
-        !_cominIp.add(socket.address.address)) {
+    if (socket.remoteAddress == LOCAL_ADDRESS) {
       socket.close();
       return;
     }
+    if (_cominIp.length >= MAX_IN_PEERS || !_cominIp.add(socket.address)) {
+      socket.close();
+      return;
+    }
+    log('incoming connect: ${socket.remoteAddress.address}:${socket.remotePort}',
+        name: runtimeType.toString());
     _peersManager.addNewPeerAddress(
         CompactAddress(socket.address, socket.port), PeerType.TCP, socket);
   }
@@ -273,10 +286,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _dht.onNewPeer(_processDHTPeer);
     // ignore: unawaited_futures
     _dht.bootstrap();
-    // TEST:
-    _dhtRepeatTimer = Timer.periodic(Duration(seconds: 60), (timer) {
-      _dht.requestPeers(String.fromCharCodes(_metaInfo.infoHashBuffer));
-    });
     if (_fileManager.isAllComplete) {
       _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
           event: EVENT_COMPLETED);
@@ -345,9 +354,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     };
     return Future.value(map);
   }
-
-  @override
-  TorrentAnnounceTracker get tracker => _tracker;
 
   @override
   bool offFileComplete(void Function(String filepath) handler) {
@@ -470,5 +476,11 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   void startAnnounceUrl(Uri url, Uint8List infoHash) {
     _tracker?.runTracker(url, infoHash);
+  }
+
+  @override
+  void requestPeersFromDHT() {
+    if (_metaInfo == null) return;
+    _dht?.requestPeers(String.fromCharCodes(_metaInfo.infoHashBuffer));
   }
 }

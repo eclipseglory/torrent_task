@@ -23,6 +23,11 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 /// TODO:
 /// - 没有处理对外的Suggest Piece/Fast Allow
 class PeersManager {
+  final List<InternetAddress> IGNORE_IPS = [
+    InternetAddress.tryParse('0.0.0.0'),
+    InternetAddress.tryParse('127.0.0.1')
+  ];
+
   bool _disposed = false;
 
   bool get isDisposed => _disposed;
@@ -31,7 +36,7 @@ class PeersManager {
 
   final Set<CompactAddress> _peersAddress = {};
 
-  final Set<InternetAddress> _comeinAddress = {};
+  final Set<InternetAddress> _incomingAddress = {};
 
   final Set<CompactAddress> _lastUTPEX = {};
 
@@ -96,18 +101,22 @@ class PeersManager {
     });
   }
 
+  /// Task is paused
   bool get isPaused => _paused;
 
+  /// All peers number. Include the connecting peer.
   int get peersNumber {
     if (_peersAddress == null || _peersAddress.isEmpty) return 0;
     return _peersAddress.length;
   }
 
+  /// All connected peers number. Include seeder.
   int get connectedPeersNumber {
     if (_activePeers == null || _activePeers.isEmpty) return 0;
     return _activePeers.length;
   }
 
+  /// All seeder number
   int get seederNumber {
     if (_activePeers == null || _activePeers.isEmpty) return 0;
     var c = 0;
@@ -119,6 +128,10 @@ class PeersManager {
     });
   }
 
+  /// Since first peer connected to end time ,
+  ///
+  /// The end time is current, but once `dispose` this class
+  /// the end time is when manager was disposed.
   int get liveTime {
     if (_startedTime == null) return 0;
     var passed = DateTime.now().millisecondsSinceEpoch - _startedTime;
@@ -128,24 +141,36 @@ class PeersManager {
     return passed;
   }
 
-  double get downloadSpeed {
+  /// Average download speed , b/ms
+  ///
+  /// This speed caculation : `total download content bytes` / [liveTime]
+  double get averageDownloadSpeed {
     var live = liveTime;
     if (live == 0) return 0.0;
     return _downloaded / live;
   }
 
-  double get uploadSpeed {
+  /// Average upload speed , b/ms
+  ///
+  /// This speed caculation : `total upload content bytes` / [liveTime]
+  double get averageUploadSpeed {
     var live = liveTime;
     if (live == 0) return 0.0;
     return _uploaded / live;
   }
 
-  double get downloadSpeed2 {
+  /// Current download speed , b/ms
+  ///
+  /// This speed caculation: sum(`active peer download speed`)
+  double get downloadSpeed {
     if (_activePeers == null || _activePeers.isEmpty) return 0.0;
     return _activePeers.fold(0.0, (p, element) => p + element.downloadSpeed);
   }
 
-  double get uploadSpeed2 {
+  /// Current upload speed , b/ms
+  ///
+  /// This speed caculation: sum(`active peer upload speed`)
+  double get uploadSpeed {
     if (_activePeers == null || _activePeers.isEmpty) return 0.0;
     return _activePeers.fold(0.0, (p, element) => p + element.uploadSpeed);
   }
@@ -247,19 +272,33 @@ class PeersManager {
       }
     }
     if (name == 'handshake') {
-      if (data['yourip'] != null &&
+      if (localExtenelIP != null &&
+          data['yourip'] != null &&
           (data['yourip'].length == 4 || data['yourip'].length == 16)) {
+        InternetAddress myip;
+        try {
+          myip = InternetAddress.fromRawAddress(data['yourip']);
+        } catch (e) {
+          return;
+        }
+        if (IGNORE_IPS.contains(myip)) return;
         localExtenelIP = InternetAddress.fromRawAddress(data['yourip']);
       }
     }
   }
 
+  /// Add a new peer [address] , the default [type] is `PeerType.TCP`,
+  /// [socket] is null.
+  ///
+  /// Usually [socket] is null , unless this peer was incoming connection, but
+  /// this type peer was managed by [TorrentTask] , user don't need to know that.
   void addNewPeerAddress(CompactAddress address,
       [PeerType type = PeerType.TCP, Socket socket]) {
     if (address == null) return;
+    if (address.address == localExtenelIP) return;
     if (socket != null) {
       // 说明是主动连接的peer,目前只允许一个ip连一次
-      if (!_comeinAddress.add(address.address)) {
+      if (!_incomingAddress.add(address.address)) {
         return;
       }
     }
@@ -346,6 +385,11 @@ class PeersManager {
     return _allcompletehandles.remove(h);
   }
 
+  /// When read the resource content complete , invoke this method to notify
+  /// this class to send it to related peer.
+  ///
+  /// [pieceIndex] is the index of the piece, [begin] is the byte index of the whole
+  /// contents , [block] should be uint8 list, it's the sub-piece contents bytes.
   void readSubPieceComplete(int pieceIndex, int begin, List<int> block) {
     var dindex = [];
     for (var i = 0; i < _remoteRequest.length; i++) {
@@ -389,6 +433,7 @@ class PeersManager {
   void _processRejectRequest(dynamic source, int index, int begin, int length) {
     var piece = _pieceProvider[index];
     piece?.pushSubPieceLast(begin ~/ DEFAULT_REQUEST_LENGTH);
+    _removeTimeoutRequest(index, begin, length);
   }
 
   void _processPeerDispose(dynamic source, [dynamic reason]) {
@@ -398,7 +443,7 @@ class PeersManager {
       reconnect = false;
     }
     _peersAddress.remove(peer.address);
-    _comeinAddress.remove(peer.address.address);
+    _incomingAddress.remove(peer.address.address);
     _activePeers.remove(peer);
 
     var bufferRequests = peer.requestBuffer;
@@ -428,14 +473,14 @@ class PeersManager {
     });
     if (reconnect) {
       if (_activePeers.length < MAX_ACTIVE_PEERS && !isDisposed) {
-        print(
-            '准备重新连接 ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
+        // print(
+        //     '准备重新连接 ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
         addNewPeerAddress(peer.address, peer.type);
       }
     } else {
       if (peer.isSeeder && !_fileManager.isAllComplete && !isDisposed) {
-        print(
-            '准备重新连接Seeder ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
+        // print(
+        //     '准备重新连接Seeder ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
         addNewPeerAddress(peer.address, peer.type);
       }
     }
@@ -445,7 +490,6 @@ class PeersManager {
     _startedTime ??= DateTime.now().millisecondsSinceEpoch;
     _endTime = null;
     var peer = source as Peer;
-    log('${peer.address} is connected', name: runtimeType.toString());
     _activePeers.add(peer);
     peer.sendHandShake();
   }
@@ -486,6 +530,8 @@ class PeersManager {
 
     if (!peer.sendRequest(piece.index, begin, size)) {
       piece.pushSubPiece(subIndex);
+    } else {
+      _requestPieces(peer); // 疯狂请求资源
     }
   }
 
@@ -518,7 +564,6 @@ class PeersManager {
 
   void _processPeerHandshake(dynamic source, String remotePeerId, data) {
     var peer = source as Peer;
-    log('$remotePeerId handshake', name: runtimeType.toString());
     peer.sendBitfield(_fileManager.localBitfield);
   }
 
@@ -527,11 +572,7 @@ class PeersManager {
       var peer = source as Peer;
       _pausedRemoteRequest[peer.id] ??= [];
       var pausedRequest = _pausedRemoteRequest[peer.id];
-      if (pausedRequest.length <= 6) {
-        pausedRequest.add([source, index, begin, length]);
-      } else {
-        peer.dispose('too many requests');
-      }
+      pausedRequest.add([source, index, begin, length]);
       return;
     }
     var peer = source as Peer;
@@ -656,6 +697,12 @@ class PeersManager {
     peer.sendKeeplive();
   }
 
+  /// Pause the task
+  ///
+  /// All the incoming request message will be received but they will be stored
+  /// in buffer and no response to remote.
+  ///
+  /// All out message/incoming connection will be processed even task is paused.
   void pause() {
     if (_paused) return;
     _paused = true;
@@ -663,6 +710,7 @@ class PeersManager {
     _keepAliveTimer = Timer(Duration(seconds: 110), _sendKeepAliveToAll);
   }
 
+  /// Resume the task
   void resume() {
     if (!_paused) return;
     _paused = false;

@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as dev;
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:bencode_dart/bencode_dart.dart';
 import 'package:torrent_task/src/peer/extended_proccessor.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:torrent_task/torrent_task.dart';
 
 import '../utils.dart';
 import 'bitfield.dart';
@@ -141,11 +143,11 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// Every request timeout timer. The key format is `<index>-<begin>`
   final _requestTimeoutMap = <String, Timer>{};
 
-  /// Max request count in one piple ,5
+  // /// Max request count in one piple ,5
   static const MAX_REQUEST_COUNT = 5;
 
-  /// single request timeout time, 30 seconds
-  static const REQUEST_TIME_OUT = 30;
+  /// single request timeout time, 15 seconds
+  static const REQUEST_TIME_OUT = 15;
 
   int _downloaded = 0;
 
@@ -154,6 +156,10 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   int _endTime;
 
   int _startTime;
+
+  int get _maxRequestCount {
+    return 2 + (downloadSpeed * 500 / DEFAULT_REQUEST_LENGTH).ceil();
+  }
 
   int get livingTime {
     if (_startTime == null) {
@@ -197,6 +203,10 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
 
   final PeerType type;
 
+  int reqq;
+
+  int remoteReqq;
+
   ///
   /// [_id] 是用于区分不同Peer的Id，和[_localPeerId]不同，[_localPeerId]是bt协议中的Peer_id。
   /// [address]是远程peer的地址和端口，子类在实现的时候可以利用该值进行远程连接。[_infoHashBuffer]
@@ -206,7 +216,8 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   Peer(this._localPeerId, this.address, this._infoHashBuffer, this._piecesNum,
       {this.type = PeerType.TCP,
       this.localEnableFastPeer = true,
-      this.localEnableExtended = true}) {
+      this.localEnableExtended = true,
+      this.reqq = 100}) {
     _remoteBitfield = Bitfield.createEmptyBitfield(_piecesNum);
   }
 
@@ -337,7 +348,9 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
 
   bool addRequest(int index, int begin, int length,
       [int timeout = REQUEST_TIME_OUT]) {
-    if (_requestBuffer.length >= MAX_REQUEST_COUNT) return false;
+    var maxCount = _maxRequestCount;
+    if (remoteReqq != null) maxCount = min(remoteReqq, maxCount);
+    if (_requestBuffer.length >= maxCount) return false;
     _requestBuffer.add([index, begin, length]);
     var t = Timer(Duration(seconds: timeout), () {
       _requestTimeout(index, begin, length);
@@ -516,6 +529,14 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     processExtendMessage(id, m);
   }
 
+  @override
+  void processExtendHandshake(data) {
+    if (data['reqq'] != null && data['reqq'] is int) {
+      remoteReqq = data['reqq'];
+    }
+    super.processExtendHandshake(data);
+  }
+
   void sendExtendMessage(String name, dynamic data) {
     var id = getExtendedEventId(name);
     if (id != null) {
@@ -627,7 +648,7 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// the peer receiving the requests MAY close the connection rather than reject the request.
   /// However, consider that it can take several seconds for buffers to drain and messages to propagate once a peer is choked.
   void _processRemoteRequest(List<int> message, [int offset = 1]) {
-    if (_remoteRequestBuffer.length >= MAX_REQUEST_COUNT) {
+    if (_remoteRequestBuffer.length > reqq) {
       dev.log('Request Error:',
           error: 'Too many requests from ${address}',
           name: runtimeType.toString());
@@ -662,6 +683,7 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
       }
     }
     _remoteRequestBuffer.add([index, begin, length]);
+    // TODO 这里做速度限制！
     fireRequest(index, begin, length);
   }
 
@@ -787,8 +809,9 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     message.add(0);
     var d = <String, dynamic>{};
     d['yourip'] = address.address.rawAddress;
-    d['v'] = 'Dart BT v0.1.0';
+    d['v'] = 'Dart BT v$VERSION';
     d['m'] = localExtened;
+    d['reqq'] = reqq;
     var m = encode(d);
     message.addAll(m);
     return message;

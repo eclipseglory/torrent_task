@@ -11,12 +11,6 @@ class Piece {
 
   final Set<String> _avalidatePeers = <String>{};
 
-  // final Set<String> ownerPeers = <String>{};
-
-  // final Set<String> downloadingPeers = <String>{};
-
-  // final _avalidatePeerChangeHandle = <Function(Piece, int)>[];
-
   Queue<int> _subPiecesQueue;
 
   final Set<int> _downloadedSubPieces = <int>{};
@@ -157,6 +151,7 @@ class Piece {
   }
 
   void pushSubPiece(int subIndex) {
+    if (subPieceQueue.contains(subIndex)) return;
     subPieceQueue.addFirst(subIndex);
   }
 
@@ -165,6 +160,7 @@ class Piece {
   }
 
   void pushSubPieceLast(int index) {
+    if (subPieceQueue.contains(index)) return;
     subPieceQueue.addLast(index);
   }
 

@@ -45,7 +45,7 @@ mixin ExtendedProcessor {
     }
     var data = decode(Uint8List.fromList(m));
     if (id == 0) {
-      _processExtendHandshake(data);
+      processExtendHandshake(data);
     } else {
       var name = _extendedEventMap[id];
       if (name != null) {
@@ -60,7 +60,7 @@ mixin ExtendedProcessor {
     });
   }
 
-  void _processExtendHandshake(dynamic data) {
+  void processExtendHandshake(dynamic data) {
     var m = data['m'] as Map;
     _rawMap = m;
     if (m != null) {
