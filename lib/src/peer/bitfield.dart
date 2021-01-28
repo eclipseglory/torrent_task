@@ -31,17 +31,6 @@ class Bitfield {
     if (bit) {
       _completedIndex = completedPieces;
       _completedIndex.add(index);
-      // TODO 好像没有排序必要 ??
-      // _completedIndex.sort((a, b) => a - b);
-      //
-      // var j = _completedIndex.length - 1;
-      // for (; j > 0; j--) {
-      //   if (_completedIndex[j - 1] > _completedIndex[j]) {
-      //     var temp = _completedIndex[j];
-      //     _completedIndex[j] = _completedIndex[j - 1];
-      //     _completedIndex[j - 1] = temp;
-      //   }
-      // }
       buffer[i] = buffer[i] | orNum;
     } else {
       _completedIndex?.remove(index);

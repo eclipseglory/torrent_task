@@ -12,7 +12,6 @@ typedef BoolHandle = void Function(dynamic source, bool value);
 typedef SingleIntHandle = void Function(dynamic source, int value);
 
 const PEER_EVENT_CONNECTED = 'connected';
-const PEER_EVENT_REQUEST_TIMEOUT = 'request_timeout';
 const PEER_EVENT_DISPOSE = 'close';
 const PEER_EVENT_HANDSHAKE = 'handshake';
 const PEER_EVENT_CHOKE_CHANGE = 'choke_change';
@@ -48,13 +47,6 @@ mixin PeerEventDispatcher {
     var fSet = _handleFunctions[PEER_EVENT_CONNECTED];
     fSet?.forEach((f) {
       Timer.run(() => f(this));
-    });
-  }
-
-  void fireRequestTimeoutEvent(int index, int begin, int length) {
-    var fSet = _handleFunctions[PEER_EVENT_REQUEST_TIMEOUT];
-    fSet?.forEach((f) {
-      Timer.run(() => f(this, index, begin, length));
     });
   }
 
@@ -314,16 +306,6 @@ mixin PeerEventDispatcher {
   /// Remove `remote request` event handler
   bool offRequest(PieceConfigHandle handle) {
     return _offPieceConfigCallback(handle, PEER_EVENT_REQUEST);
-  }
-
-  /// Add `request timeout` event handler
-  bool onRequestTimeout(PieceConfigHandle handle) {
-    return _onPieceConfigCallback(handle, PEER_EVENT_REQUEST_TIMEOUT);
-  }
-
-  /// Remove `request timeout` event handler
-  bool offRequestTimeout(PieceConfigHandle handle) {
-    return _offPieceConfigCallback(handle, PEER_EVENT_REQUEST_TIMEOUT);
   }
 
   /// Add `handshake` event handler

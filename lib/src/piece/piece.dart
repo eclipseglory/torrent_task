@@ -96,6 +96,16 @@ class Piece {
     // return re;
   }
 
+  bool subPieceIsWritting(int begin) {
+    var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
+    return _writtingSubPieces.contains(subindex);
+  }
+
+  bool subPieceIsDownloaded(int begin) {
+    var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
+    return _downloadedSubPieces.contains(subindex);
+  }
+
   bool subPieceWriteComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
     _writtingSubPieces.remove(subindex);

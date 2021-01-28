@@ -16,3 +16,7 @@
 ## 0.1.2
 - Support peer reconnect
 - Fix some bugs
+
+## 0.1.4
+- Fix some issues
+- Fix peer download slow issue

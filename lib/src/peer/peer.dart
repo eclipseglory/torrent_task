@@ -7,7 +7,9 @@ import 'dart:typed_data';
 import 'package:bencode_dart/bencode_dart.dart';
 import 'package:torrent_task/src/peer/extended_proccessor.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:torrent_task/src/peer/congestion_control.dart';
 import 'package:torrent_task/torrent_task.dart';
+import 'package:utp/utp.dart';
 
 import '../utils.dart';
 import 'bitfield.dart';
@@ -56,7 +58,7 @@ const OP_SUGGEST_PIECE = 0x0d;
 const OP_REJECT_REQUEST = 0x10;
 const OP_ALLOW_FAST = 0x11;
 
-enum PeerType { TCP, uTP }
+enum PeerType { TCP, UTP }
 
 /// 30 Seconds
 const DEFAULT_CONNECT_TIMEOUT = 30;
@@ -70,7 +72,8 @@ typedef BoolHandle = void Function(Peer peer, bool value);
 
 typedef SingleIntHandle = void Function(Peer peer, int value);
 
-abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
+abstract class Peer
+    with PeerEventDispatcher, ExtendedProcessor, CongestionControl {
   /// Countdown time , when peer don't receive or send any message from/to remote ,
   /// this class will invoke close.
   /// 单位:秒
@@ -140,14 +143,8 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// 远程发送请求buffer。格式位：[index,begin,length]
   final _remoteRequestBuffer = <List<int>>[];
 
-  /// Every request timeout timer. The key format is `<index>-<begin>`
-  final _requestTimeoutMap = <String, Timer>{};
-
   // /// Max request count in one piple ,5
   static const MAX_REQUEST_COUNT = 5;
-
-  /// single request timeout time, 15 seconds
-  static const REQUEST_TIME_OUT = 15;
 
   int _downloaded = 0;
 
@@ -156,10 +153,6 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   int _endTime;
 
   int _startTime;
-
-  int get _maxRequestCount {
-    return 2 + (downloadSpeed * 500 / DEFAULT_REQUEST_LENGTH).ceil();
-  }
 
   int get livingTime {
     if (_startTime == null) {
@@ -172,13 +165,8 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     return passed;
   }
 
-  double get downloadSpeed {
-    var lt = livingTime;
-    if (lt == 0) return 0.0;
-    return _downloaded / lt;
-  }
-
-  double get uploadSpeed {
+  /// 平均上传速度
+  double get averageUploadSpeed {
     var lt = livingTime;
     if (lt == 0) return 0.0;
     return _uploaded / lt;
@@ -228,9 +216,11 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
         enableExtend: enableExtend, enableFast: enableFast);
   }
 
-  factory Peer.newUTPPeer() {
-    // TODO IMPLEMENT THIS!
-    throw '还没实现';
+  factory Peer.newUTPPeer(String localPeerId, CompactAddress address,
+      List<int> infoHashBuffer, int piecesNum, Socket socket,
+      {bool enableExtend = true, bool enableFast = true}) {
+    return _UTPPeer(localPeerId, address, infoHashBuffer, piecesNum, socket,
+        enableExtend: enableExtend, enableFast: enableFast);
   }
 
   /// 远程的Bitfield
@@ -326,7 +316,6 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     _cacheBuffer.clear();
     // 清空请求缓存
     _requestBuffer.clear();
-    _requestTimeoutMap.clear();
     _remoteRequestBuffer.clear();
     // 重置fast pieces
     _remoteAllowFastPieces.clear();
@@ -339,41 +328,44 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
 
   List<int> removeRequest(int index, int begin, int length) {
     var request = _removeRequestFromBuffer(index, begin, length);
-    if (request != null) {
-      var timer = _requestTimeoutMap.remove('$index-$begin');
-      timer?.cancel();
-    }
     return request;
   }
 
-  bool addRequest(int index, int begin, int length,
-      [int timeout = REQUEST_TIME_OUT]) {
-    var maxCount = _maxRequestCount;
+  /// 添加一个request到buffer中
+  ///
+  /// 这个request是一个数组 :
+  /// - 0 : index
+  /// - 1 : begin
+  /// - 2 : length
+  /// - 3 : send time
+  /// - 4 : resend times
+  bool addRequest(int index, int begin, int length) {
+    var testspeed = currentSpeed;
+    var maxCount = 2 + (testspeed * 500 / DEFAULT_REQUEST_LENGTH).ceil();
+    // maxCount = oldCount;
     if (remoteReqq != null) maxCount = min(remoteReqq, maxCount);
     if (_requestBuffer.length >= maxCount) return false;
-    _requestBuffer.add([index, begin, length]);
-    var t = Timer(Duration(seconds: timeout), () {
-      _requestTimeout(index, begin, length);
-    });
-    _requestTimeoutMap['$index-$begin'] = t;
+    _requestBuffer
+        .add([index, begin, length, DateTime.now().microsecondsSinceEpoch, 0]);
     return true;
   }
 
   void _processReceiveData(dynamic data) {
     // 不管收到什么消息，只要不是空的，重置倒计时:
-    if (data.isNotEmpty) _startToCountdown();
+    if (data != null && data.isNotEmpty) _startToCountdown();
     // if (data.isNotEmpty) log('收到数据 $data');
-    _cacheBuffer.addAll(data); // 接受remote发送数据。缓冲到一处
+    if (data != null) _cacheBuffer.addAll(data); // 接受remote发送数据。缓冲到一处
     if (_cacheBuffer.isEmpty) return;
     // 查看是不是handshake头
     if (_cacheBuffer[0] == 19 && _cacheBuffer.length >= 68) {
       if (_isHandShakeHead(_cacheBuffer)) {
         if (_validateInfoHash(_cacheBuffer)) {
-          var temp = _cacheBuffer.sublist(0, 68);
+          var handshakeBuffer = Uint8List(68);
+          List.copyRange(handshakeBuffer, 0, _cacheBuffer, 0, 68);
           _cacheBuffer = _cacheBuffer.sublist(68);
-          _processHandShake(temp);
+          Timer.run(() => _processHandShake(handshakeBuffer));
           if (_cacheBuffer.isNotEmpty) {
-            Future.delayed(Duration.zero, () => _processReceiveData(<int>[]));
+            Timer.run(() => _processReceiveData(null));
           }
           return;
         } else {
@@ -384,26 +376,26 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
       }
     }
     if (_cacheBuffer.length >= 4) {
-      var length =
-          ByteData.sublistView(Uint8List.fromList(_cacheBuffer.sublist(0, 4)))
-              .getUint32(0, Endian.big);
-      if (length == 0) {
-        _cacheBuffer = _cacheBuffer.sublist(4);
-        _processMessage(<int>[]);
-        if (_cacheBuffer.isNotEmpty) {
-          Future.delayed(Duration.zero, () => _processReceiveData(<int>[]));
+      var start = 0;
+      var lengthBuffer = Uint8List(4);
+      List.copyRange(lengthBuffer, 0, _cacheBuffer, start, 4);
+      var length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
+      while (_cacheBuffer.length - start - 4 >= length) {
+        if (length == 0) {
+          Timer.run(() => _processMessage(null, null));
+        } else {
+          var messageBuffer = Uint8List(length - 1);
+          var id = _cacheBuffer[start + 4];
+          List.copyRange(
+              messageBuffer, 0, _cacheBuffer, start + 5, start + 4 + length);
+          Timer.run(() => _processMessage(id, messageBuffer));
         }
-      } else {
-        if (_cacheBuffer.length - 4 >= length) {
-          var temp = _cacheBuffer.sublist(4, length + 4);
-          _cacheBuffer = _cacheBuffer.sublist(length + 4);
-          // print('receive $length datas : $temp , ${temp.length}');
-          _processMessage(temp);
-          if (_cacheBuffer.isNotEmpty) {
-            Future.delayed(Duration.zero, () => _processReceiveData(<int>[]));
-          }
-        }
+        start += (length + 4);
+        if (_cacheBuffer.length - start < 4) break;
+        List.copyRange(lengthBuffer, 0, _cacheBuffer, start, start + 4);
+        length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
       }
+      if (start != 0) _cacheBuffer = _cacheBuffer.sublist(start);
     }
   }
 
@@ -422,13 +414,13 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     return true;
   }
 
-  void _processMessage(List<int> message) {
-    if (message.isEmpty) {
+  void _processMessage(int id, Uint8List message) {
+    if (id == null) {
       _log('process keep alive $address');
       fireKeepAlive();
       return;
     } else {
-      switch (message[0]) {
+      switch (id) {
         case ID_CHOKE:
           _log('remote choke me : $address');
           chokeMe = true; // choke message
@@ -447,9 +439,7 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
           return; // not interseted message
         case ID_HAVE:
           _log('process have from : $address');
-          var index = ByteData.sublistView(
-                  Uint8List.fromList(message), 1, message.length)
-              .getUint32(0);
+          var index = ByteData.view(message.buffer).getUint32(0);
           _processHave(index);
           return; // have message
         case ID_BITFIELD:
@@ -462,7 +452,7 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
           return; // request message
         case ID_PIECE:
           _log('process pices : $address');
-          _processReceivePiece(Uint8List.fromList(message));
+          _processReceivePiece(message);
           return; // pices message
         case ID_CANCEL:
           _log('process cancel : $address');
@@ -470,9 +460,8 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
           return; // cancel message
         case ID_PORT:
           _log('process port : $address');
-          var port = ByteData.sublistView(
-              Uint8List.fromList(message), 1, message.length);
-          _processPortChange(port.getUint32(0));
+          var port = ByteData.view(message.buffer).getUint16(0);
+          _processPortChange(port);
           return; // port message
         case OP_HAVE_ALL:
           _log('process have all : $address');
@@ -495,7 +484,9 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
           _processAllowFast(message);
           return;
         case ID_EXTENDED:
-          _processExtendedMessage(message);
+          var extid = message[0];
+          message = message.sublist(1);
+          processExtendMessage(extid, message);
           return;
       }
     }
@@ -523,12 +514,6 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     return -1;
   }
 
-  void _processExtendedMessage(List<int> message) {
-    var id = message[1];
-    var m = message.sublist(2);
-    processExtendMessage(id, m);
-  }
-
   @override
   void processExtendHandshake(data) {
     if (data['reqq'] != null && data['reqq'] is int) {
@@ -548,11 +533,11 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     }
   }
 
-  void _processCancel(List<int> message, [int offset = 1]) {
-    var view = ByteData.view(Uint8List.fromList(message).buffer);
-    var index = view.getUint32(offset);
-    var begin = view.getUint32(offset + 4);
-    var length = view.getUint32(offset + 8);
+  void _processCancel(Uint8List message) {
+    var view = ByteData.view(message.buffer);
+    var index = view.getUint32(0);
+    var begin = view.getUint32(4);
+    var length = view.getUint32(8);
     var requestIndex;
     for (var i = 0; i < _remoteRequestBuffer.length; i++) {
       var r = _remoteRequestBuffer[i];
@@ -600,41 +585,43 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   ///
   /// When the fast extension is disabled, if a peer receives a Suggest Piece message,
   /// the peer MUST close the connection.
-  void _processSuggestPiece(List<int> message, [int offset = 1]) {
+  void _processSuggestPiece(Uint8List message) {
     if (!remoteEnableFastPeer) {
       dispose('Remote disabled fast extension but receive \'suggest piece\'');
       return;
     }
-    var view = ByteData.view(Uint8List.fromList(message).buffer);
-    var index = view.getUint32(offset);
+    var view = ByteData.view(message.buffer);
+    var index = view.getUint32(0);
     if (_remoteSuggestPieces.add(index)) fireSuggestPiece(index);
   }
 
-  void _processRejectRequest(List<int> message, [int offset = 1]) {
+  void _processRejectRequest(Uint8List message) {
     if (!remoteEnableFastPeer) {
       dispose('Remote disabled fast extension but receive \'reject request\'');
       return;
     }
 
-    var view = ByteData.view(Uint8List.fromList(message).buffer);
-    var index = view.getUint32(offset);
-    var begin = view.getUint32(offset + 4);
-    var length = view.getUint32(offset + 8);
+    var view = ByteData.view(message.buffer);
+    var index = view.getUint32(0);
+    var begin = view.getUint32(4);
+    var length = view.getUint32(8);
     if (removeRequest(index, begin, length) != null) {
+      startRequestDataTimeout();
       fireRejectRequest(index, begin, length);
     } else {
-      dispose('Never send request ($index,$begin) but recieve a rejection');
+      // 有可能被删除了，但是reject来慢了而已
+      // dispose('Never send request ($index,$begin) but recieve a rejection');
       return;
     }
   }
 
-  void _processAllowFast(List<int> message, [int offset = 1]) {
+  void _processAllowFast(Uint8List message) {
     if (!remoteEnableFastPeer) {
       dispose('Remote disabled fast extension but receive \'allow fast\'');
       return;
     }
-    var view = ByteData.view(Uint8List.fromList(message).buffer);
-    var index = view.getUint32(offset);
+    var view = ByteData.view(message.buffer);
+    var index = view.getUint32(0);
     if (_remoteAllowFastPieces.add(index)) {
       fireAllowFast(index);
     }
@@ -647,7 +634,7 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// - If a peer receives an excessive number of requests from a peer it is choking,
   /// the peer receiving the requests MAY close the connection rather than reject the request.
   /// However, consider that it can take several seconds for buffers to drain and messages to propagate once a peer is choked.
-  void _processRemoteRequest(List<int> message, [int offset = 1]) {
+  void _processRemoteRequest(Uint8List message) {
     if (_remoteRequestBuffer.length > reqq) {
       dev.log('Request Error:',
           error: 'Too many requests from ${address}',
@@ -655,10 +642,10 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
       dispose(BadException('Too many requests from ${address}'));
       return;
     }
-    var view = ByteData.view(Uint8List.fromList(message).buffer);
-    var index = view.getUint32(offset);
-    var begin = view.getUint32(offset + 4);
-    var length = view.getUint32(offset + 8);
+    var view = ByteData.view(message.buffer);
+    var index = view.getUint32(0);
+    var begin = view.getUint32(4);
+    var length = view.getUint32(8);
     if (length > MAX_REQUEST_LENGTH) {
       dev.log('TOO LARGEt BLOCK',
           error: 'BLOCK $length', name: runtimeType.toString());
@@ -666,11 +653,6 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
           '${address} : request block length larger than limit : $length > $MAX_REQUEST_LENGTH'));
       return;
     }
-    // 重复的不管？
-    // for (var i = 0; i < _remoteRequestBuffer.length; i++) {
-    //   var re = _remoteRequestBuffer[i];
-    //   if (re[0] == index && re[1] == begin && re[2] == length) return;
-    // }
     if (chokeRemote) {
       if (_allowFastPieces.contains(index)) {
         _remoteRequestBuffer.add([index, begin, length]);
@@ -682,20 +664,32 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
         return;
       }
     }
+
     _remoteRequestBuffer.add([index, begin, length]);
     // TODO 这里做速度限制！
     fireRequest(index, begin, length);
   }
 
-  void _processReceivePiece(List<int> message, [int offset = 1]) {
-    var view = ByteData.view(Uint8List.fromList(message).buffer);
-    var index = view.getUint32(offset);
-    var begin = view.getUint32(offset + 4);
-    removeRequest(index, begin, message.length);
-    var contentLength = message.length - offset - 8;
-    _downloaded += contentLength;
+  void _processReceivePiece(List<int> message) {
+    var dataHead = Uint8List(8);
+    List.copyRange(dataHead, 0, message, 0, 8);
+    var view = ByteData.view(dataHead.buffer);
+    var index = view.getUint32(0);
+    var begin = view.getUint32(4);
+
+    var block = Uint8List(message.length - 8);
+    List.copyRange(block, 0, message, 8);
+    var blockLength = block.length;
+    var request = removeRequest(index, begin, blockLength);
+    // 没有请求的就不处理
+    if (request == null) {
+      return;
+    }
+    ackRequest(request);
+    _downloaded += blockLength;
     _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
-    firePiece(index, begin, message.sublist(offset + 8));
+    firePiece(index, begin, block);
+    startRequestDataTimeout();
   }
 
   void _processHave(int index) {
@@ -708,8 +702,9 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     _remoteBitfield.setBit(index, have);
   }
 
-  void initRemoteBitfield(List<int> bitfield) {
-    _remoteBitfield = Bitfield.copyFrom(_piecesNum, bitfield, 1);
+  void initRemoteBitfield(Uint8List bitfield) {
+    _remoteBitfield = Bitfield(_piecesNum, bitfield);
+    // Bitfield.copyFrom(_piecesNum, bitfield, 1);
     fireBitfield(_remoteBitfield);
   }
 
@@ -762,19 +757,19 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   }
 
   List<int> _createByteMessage(int id, List<int> message) {
-    var m = <int>[];
-    var l = Uint8List(4);
     var length = 0;
     if (message != null) length = message.length;
     length = length + 1;
-    var view = ByteData.view(l.buffer);
-    view.setUint32(0, length, Endian.big);
-    m.addAll(l);
-    m.add(id);
+    var datas = List<int>(length + 4);
+    var head = Uint8List(4);
+    var view1 = ByteData.view(head.buffer);
+    view1.setUint32(0, length, Endian.big);
+    List.copyRange(datas, 0, head);
+    datas[4] = id;
     if (message != null && message.isNotEmpty) {
-      m.addAll(message);
+      List.copyRange(datas, 5, message);
     }
-    return m;
+    return datas;
   }
 
   /// Send the message buffer to remote
@@ -849,7 +844,9 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
         break;
       }
     }
-    if (requestIndex == null) return false;
+    if (requestIndex == null) {
+      return false;
+    }
     _remoteRequestBuffer.removeAt(requestIndex);
     var bytes = <int>[];
     var messageHead = Uint8List(8);
@@ -863,6 +860,11 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     return true;
   }
 
+  @override
+  void timeOutErrorHappen() {
+    dispose('BADTIMEOUT');
+  }
+
   /// `request: <len=0013><id=6><index><begin><length>`
   ///
   /// The `request` message is fixed length, and is used to request a block.
@@ -874,29 +876,54 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// - [timeout]: when send request to remote , after [timeout] dont get response,
   /// it will fire [requestTimeout] event
   bool sendRequest(int index, int begin,
-      [int length = DEFAULT_REQUEST_LENGTH, int timeout = REQUEST_TIME_OUT]) {
+      [int length = DEFAULT_REQUEST_LENGTH]) {
     if (_chokeMe) {
       if (!remoteEnableFastPeer || !_remoteAllowFastPieces.contains(index)) {
         return false;
       }
     }
 
-    if (!addRequest(index, begin, length, timeout)) {
+    if (!addRequest(index, begin, length)) {
       return false;
     }
+    _sendRequestMessage(index, begin, length);
+    startRequestDataTimeout();
+    return true;
+  }
+
+  void _sendRequestMessage(int index, int begin, int length) {
     var bytes = Uint8List(12);
     var view = ByteData.view(bytes.buffer);
     view.setUint32(0, index, Endian.big);
     view.setUint32(4, begin, Endian.big);
     view.setUint32(8, length, Endian.big);
     sendMessage(ID_REQUEST, bytes);
-    return true;
   }
 
-  void _requestTimeout(int index, int begin, int length) {
-    var timer = _requestTimeoutMap.remove('$index-$begin');
-    timer?.cancel();
-    fireRequestTimeoutEvent(index, begin, length);
+  @override
+  List<List<int>> get currentRequestBuffer => _requestBuffer;
+
+  /// 请求取消某个request
+  ///
+  /// 如果在请求队列中就删除，否则返回
+  void requestCancel(int index, int begin, int length) {
+    var request = removeRequest(index, begin, length);
+    if (request != null) {
+      sendCancel(index, begin, length);
+    }
+  }
+
+  @override
+  void orderResendRequest(int index, int begin, int length, int resend) {
+    _requestBuffer.add([
+      index,
+      begin,
+      length,
+      DateTime.now().microsecondsSinceEpoch,
+      resend + 1
+    ]);
+    // print('重新发送请求：[${index} - ${begin}]');
+    // _sendRequestMessage(index, begin, length);
   }
 
   /// `bitfield: <len=0001+X><id=5><bitfield>`
@@ -988,8 +1015,8 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
   /// The listen port is the port this peer's DHT node is listening on. This peer should be
   /// inserted in the local routing table (if DHT tracker is supported).
   void sendPortChange(int port) {
-    var bytes = Uint8List(8);
-    ByteData.view(bytes.buffer).setUint32(0, port);
+    var bytes = Uint8List(2);
+    ByteData.view(bytes.buffer).setUint16(0, port);
     sendMessage(ID_PORT, bytes);
   }
 
@@ -1097,12 +1124,9 @@ abstract class Peer with PeerEventDispatcher, ExtendedProcessor {
     fireDisposeEvent(reason);
     clearEventHandles();
     clearExtendedProcessors();
+    clearCC();
     var re = _streamChunk?.cancel();
     _streamChunk = null;
-    _requestTimeoutMap.forEach((key, value) {
-      value?.cancel();
-    });
-    _requestTimeoutMap.clear();
     _countdownTimer?.cancel();
     _countdownTimer = null;
     return re;
@@ -1174,5 +1198,37 @@ class _TCPPeer extends Peer {
     } finally {
       return super.dispose(reason);
     }
+  }
+}
+
+class _UTPPeer extends Peer {
+  UTPSocketClient _client;
+  UTPSocket _socket;
+  _UTPPeer(String localPeerId, CompactAddress address, List<int> infoHashBuffer,
+      int piecesNum, this._socket,
+      {bool enableExtend = true, bool enableFast = true})
+      : super(localPeerId, address, infoHashBuffer, piecesNum,
+            type: PeerType.UTP,
+            localEnableExtended: enableExtend,
+            localEnableFastPeer: enableFast);
+
+  @override
+  Future<Stream> connectRemote(int timeout) async {
+    if (_socket != null) return _socket;
+    _client ??= UTPSocketClient();
+    _socket = await _client.connect(address.address, address.port);
+    return _socket;
+  }
+
+  @override
+  void sendByteMessage(List<int> bytes) {
+    _socket?.add(bytes);
+  }
+
+  @override
+  Future dispose([reason]) async {
+    await _socket?.close();
+    await _client?.close();
+    return super.dispose(reason);
   }
 }

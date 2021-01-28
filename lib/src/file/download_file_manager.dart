@@ -226,12 +226,13 @@ class DownloadFileManager {
   void writeFile(int pieceIndex, int begin, List<int> block) {
     var tempFiles = _piece2fileMap[pieceIndex];
     var ps = pieceIndex * metainfo.pieceLength + begin;
-    var pe = ps + block.length;
+    var blockSize = block.length;
+    var pe = ps + blockSize;
     if (tempFiles == null || tempFiles.isEmpty) return;
     var futures = <Future>[];
     for (var i = 0; i < tempFiles.length; i++) {
       var tempFile = tempFiles[i];
-      var re = _mapDownloadFilePosition(ps, pe, block.length, tempFile);
+      var re = _mapDownloadFilePosition(ps, pe, blockSize, tempFile);
       if (re == null) continue;
       var substart = re['begin'];
       var position = re['position'];
@@ -242,9 +243,9 @@ class DownloadFileManager {
       return p && a;
     }).then((result) {
       if (result) {
-        _subPieceWriteComplete(pieceIndex, begin, block.length);
+        _subPieceWriteComplete(pieceIndex, begin, blockSize);
       } else {
-        _subPieceWriteFailed(pieceIndex, begin, block.length);
+        _subPieceWriteFailed(pieceIndex, begin, blockSize);
       }
     });
     return;

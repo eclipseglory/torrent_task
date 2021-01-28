@@ -6,9 +6,10 @@ import 'package:torrent_task/torrent_task.dart';
 
 void main() async {
   try {
-    var torrentFile = 'example/test17.torrent';
-    var savePath = 'g:/bttest/';
+    var torrentFile = 'example/12.torrent';
+    var savePath = 'g:/';
     var model = await Torrent.parse(torrentFile);
+    // model.announces.clear();
     var task = TorrentTask.newTask(model, savePath);
     Timer timer;
     Timer timer1;
@@ -44,7 +45,7 @@ void main() async {
           '${((task.averageDownloadSpeed) * 1000 / 1024).toStringAsFixed(2)}';
       var aps =
           '${((task.averageUploadSpeed) * 1000 / 1024).toStringAsFixed(2)}';
-      var ds = '${((task.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}';
+      var ds = '${((task.currentDownloadSpeed) * 1000 / 1024).toStringAsFixed(2)}';
       var ps = '${((task.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)}';
       var active = task.connectedPeersNumber;
       var seeders = task.seederNumber;

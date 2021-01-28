@@ -7,6 +7,7 @@ import 'package:torrent_model/torrent_model.dart';
 import 'package:torrent_tracker/torrent_tracker.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
 import 'package:dht_dart/dht_dart.dart';
+import 'package:utp/utp.dart';
 
 import 'file/download_file_manager.dart';
 import 'file/state_file.dart';
@@ -32,7 +33,7 @@ abstract class TorrentTask {
   int get seederNumber;
 
   /// Current download speed
-  double get downloadSpeed;
+  double get currentDownloadSpeed;
 
   /// Current upload speed
   double get uploadSpeed;
@@ -91,7 +92,8 @@ abstract class TorrentTask {
   void addDHTNode(Uri uri);
 
   /// 添加已知的Peer地址
-  void addPeer(CompactAddress address);
+  void addPeer(CompactAddress address,
+      [PeerType type = PeerType.TCP, Socket socket]);
 }
 
 class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
@@ -157,9 +159,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  double get downloadSpeed {
+  double get currentDownloadSpeed {
     if (_peersManager != null) {
-      return _peersManager.downloadSpeed;
+      return _peersManager.currentDownloadSpeed;
     } else {
       return 0.0;
     }
@@ -193,14 +195,14 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  void addPeer(CompactAddress address) {
-    _peersManager.addNewPeerAddress(address);
+  void addPeer(CompactAddress address,
+      [PeerType type = PeerType.TCP, Socket socket]) {
+    _peersManager.addNewPeerAddress(address, type, socket);
   }
 
   void _whenTaskDownloadComplete() async {
     await _peersManager.disposeAllSeeder('Download complete,disconnect seeder');
-    await _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
-        event: EVENT_COMPLETED);
+    await _tracker.complete();
     _fireTaskComplete();
   }
 
@@ -226,6 +228,13 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     if (infoHash == _infoHashString) {
       _processNewPeerFound(peer);
     }
+  }
+
+  void _hookUTP(UTPSocket socket) {
+    log('income utp connect: ${socket.remoteAddress.address}:${socket.remotePort}',
+        name: runtimeType.toString());
+    _peersManager.addNewPeerAddress(
+        CompactAddress(socket.address, socket.port), PeerType.UTP, socket);
   }
 
   void _hookInPeer(Socket socket) {
@@ -263,12 +272,20 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
+  // TODO test
+  // ServerUTPSocket _utpServer;
+
   @override
   Future start() async {
     // 进入的peer：
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
     await _init(_metaInfo, _savePath);
     _serverSocket.listen(_hookInPeer);
+
+    // _utpServer ??= await ServerUTPSocket.bind(InternetAddress.anyIPv4, 0);
+    // _utpServer.listen(_hookUTP);
+    // print(_utpServer.port);
+
     var map = {};
     map['name'] = _metaInfo.name;
     map['tcp_socket'] = _serverSocket.port;
@@ -281,6 +298,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _tracker.onPeerEvent(_processTrackerPeerEvent);
     _peersManager.onAllComplete(_whenTaskDownloadComplete);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
+
     _dht.announce(
         String.fromCharCodes(_metaInfo.infoHashBuffer), _serverSocket.port);
     _dht.onNewPeer(_processDHTPeer);
@@ -298,12 +316,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   @override
   Future stop([bool force = false]) async {
-    try {
-      // TODO fix this bug
-      await _tracker?.stop(force);
-    } catch (e) {
-      // do nothing
-    }
+    await _tracker?.stop(force);
     var tempHandler = Set<Function>.from(_stopHandlers);
     await dispose();
     tempHandler.forEach((element) {

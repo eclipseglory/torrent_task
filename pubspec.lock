@@ -350,7 +350,7 @@ packages:
       name: torrent_tracker
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "1.3.6"
+    version: "1.3.12"
   typed_data:
     dependency: transitive
     description:
@@ -358,6 +358,13 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.3.0-nullsafety.3"
+  utp:
+    dependency: "direct main"
+    description:
+      name: utp
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.0.0"
   vm_service:
     dependency: transitive
     description:

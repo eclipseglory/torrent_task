@@ -36,14 +36,8 @@ mixin ExtendedProcessor {
     return null;
   }
 
-  void processExtendMessage(int id, List<int> message,
-      [int start = 0, int end]) {
-    end ??= message.length;
-    var m = message;
-    if (start != 0 || end != message.length) {
-      m = message.sublist(start, end);
-    }
-    var data = decode(Uint8List.fromList(m));
+  void processExtendMessage(int id, Uint8List message) {
+    var data = decode(message);
     if (id == 0) {
       processExtendHandshake(data);
     } else {

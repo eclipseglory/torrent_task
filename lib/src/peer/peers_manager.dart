@@ -51,8 +51,6 @@ class PeersManager {
 
   final Set<void Function()> _noActivePeerhandles = {};
 
-  final List<List<dynamic>> _timeoutRequest = [];
-
   final Torrent _metaInfo;
 
   int _uploaded = 0;
@@ -162,9 +160,9 @@ class PeersManager {
   /// Current download speed , b/ms
   ///
   /// This speed caculation: sum(`active peer download speed`)
-  double get downloadSpeed {
+  double get currentDownloadSpeed {
     if (_activePeers == null || _activePeers.isEmpty) return 0.0;
-    return _activePeers.fold(0.0, (p, element) => p + element.downloadSpeed);
+    return _activePeers.fold(0.0, (p, element) => p + element.currentSpeed);
   }
 
   /// Current upload speed , b/ms
@@ -172,7 +170,8 @@ class PeersManager {
   /// This speed caculation: sum(`active peer upload speed`)
   double get uploadSpeed {
     if (_activePeers == null || _activePeers.isEmpty) return 0.0;
-    return _activePeers.fold(0.0, (p, element) => p + element.uploadSpeed);
+    return _activePeers.fold(
+        0.0, (p, element) => p + element.averageUploadSpeed);
   }
 
   void _hookPeer(Peer peer) {
@@ -303,9 +302,16 @@ class PeersManager {
       }
     }
     if (_peersAddress.add(address)) {
-      var peer = Peer.newTCPPeer(_localPeerId, address,
-          _metaInfo.infoHashBuffer, _metaInfo.pieces.length, socket);
-      _hookPeer(peer);
+      Peer peer;
+      if (type == PeerType.TCP) {
+        peer = Peer.newTCPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
+            _metaInfo.pieces.length, socket);
+      }
+      if (type == PeerType.UTP) {
+        peer = Peer.newUTPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
+            _metaInfo.pieces.length, socket);
+      }
+      if (peer != null) _hookPeer(peer);
     }
   }
 
@@ -433,7 +439,18 @@ class PeersManager {
   void _processRejectRequest(dynamic source, int index, int begin, int length) {
     var piece = _pieceProvider[index];
     piece?.pushSubPieceLast(begin ~/ DEFAULT_REQUEST_LENGTH);
-    _removeTimeoutRequest(index, begin, length);
+  }
+
+  void _pushSubpicesBack(List<List<int>> requests) {
+    if (requests == null || requests.isEmpty) return;
+    requests.forEach((element) {
+      var pindex = element[0];
+      var begin = element[1];
+      // TODO 这里很危险，目前都是已16kb来分解一个piece，如果不是呢？
+      var piece = _pieceManager[pindex];
+      var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
+      piece?.pushSubPiece(subindex);
+    });
   }
 
   void _processPeerDispose(dynamic source, [dynamic reason]) {
@@ -447,15 +464,8 @@ class PeersManager {
     _activePeers.remove(peer);
 
     var bufferRequests = peer.requestBuffer;
-    bufferRequests.forEach((element) {
-      var pindex = element[0];
-      var begin = element[1];
-      var length = element[2];
-      var piece = _pieceManager[pindex];
-      var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
-      _removeTimeoutRequest(pindex, begin, length);
-      piece?.pushSubPiece(subindex);
-    });
+    _pushSubpicesBack(bufferRequests);
+
     var completedPieces = peer.remoteCompletePieces;
     completedPieces.forEach((index) {
       _pieceProvider[index]?.removeAvalidatePeer(peer.id);
@@ -507,20 +517,7 @@ class PeersManager {
       piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
           _pieceProvider, peer.remoteSuggestPieces);
     }
-    if (piece == null) {
-      if (_timeoutRequest.isNotEmpty) {
-        // 如果已经没有可以请求的piece，看看超时piece
-        var timeoutR = _timeoutRequest.removeAt(0);
-        var p = timeoutR[3] as Peer;
-        if (p != null) {
-          p.removeRequest(timeoutR[0], timeoutR[1], timeoutR[2]);
-        }
-        if (!peer.sendRequest(timeoutR[0], timeoutR[1], timeoutR[2])) {
-          _timeoutRequest.insert(0, timeoutR);
-        }
-      }
-      return;
-    }
+    if (piece == null) return;
     var subIndex = piece.popSubPiece();
     var size = DEFAULT_REQUEST_LENGTH; // block大小现算
     var begin = subIndex * size;
@@ -538,24 +535,7 @@ class PeersManager {
   void _processReceivePiece(
       dynamic source, int index, int begin, List<int> block) {
     var peer = source as Peer;
-    var rindex = -1;
     _downloaded += block.length;
-    for (var i = 0; i < _timeoutRequest.length; i++) {
-      var tr = _timeoutRequest[i];
-      if (tr[0] == index && tr[1] == begin && tr[2] == block.length) {
-        // log('超时Request[$index,$begin]已从${peer.address}获得，当前超时Request:$_timeoutRequest',
-        //     name: runtimeType.toString());
-        rindex = i;
-        break;
-      }
-    }
-    if (rindex != -1) {
-      var tr = _timeoutRequest.removeAt(rindex);
-      var peer = tr[3] as Peer;
-      if (peer != null && !peer.isDisposed) {
-        peer.removeRequest(index, begin, block.length);
-      }
-    }
     _fileManager.writeFile(index, begin, block);
     var nextIndex = _pieceManager.selectPieceWhenReceiveData(
         peer.id, peer.remoteCompletePieces, index, begin);
@@ -645,46 +625,37 @@ class PeersManager {
     }
   }
 
-  void _processRequestTimeout(
-      dynamic source, int index, int begin, int length) {
-    // 如果超时，不会重新请求，等待。实在不来会在销毁peer的时候释放所有它对应的请求
-    _addTimeoutRequest(index, begin, length, source);
-    // log('从 ${peer.address} 请求 [$index,$begin] 超时 , 所有超时Request :$_timeoutRequest',
-    //     name: runtimeType.toString());
-    // if (_pieceProvider[index] != null &&
-    //     _pieceProvider[index].haveAvalidateSubPiece()) {
-    //   _requestPieces(peer, index);
-    // } else {
-    //   _requestPieces(peer);
-    // }
-  }
-
-  /// 往time out request buffer中记录
-  bool _addTimeoutRequest(int index, int begin, int length, Peer peer) {
-    for (var i = 0; i < _timeoutRequest.length; i++) {
-      var r = _timeoutRequest[i];
-      if (r[0] == index && r[1] == begin && length == r[2]) {
-        return false;
+  void _processRequestTimeout(dynamic source, List<List<int>> requests) {
+    var peer = source as Peer;
+    var flag = false;
+    requests.forEach((element) {
+      if (element[4] >= 3) {
+        flag = true;
+        print(
+            'Cancel and re-request it by others :  ${element[0]} - ${element[1]}');
+        peer.requestCancel(element[0], element[1], element[2]);
+        var index = element[0];
+        var begin = element[1];
+        var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
+        var piece = _pieceManager[index];
+        if (piece != null) {
+          var subPieceCompleted = piece.subPieceIsDownloaded(begin) ||
+              piece.subPieceIsWritting(begin);
+          if (!subPieceCompleted) {
+            piece?.pushSubPiece(subindex);
+            return;
+          }
+        }
       }
+    });
+    // 唤醒其他可能没有工作的peer
+    if (flag) {
+      _activePeers.forEach((p) {
+        if (p != peer && p.currentRequestBuffer.isEmpty) {
+          Timer.run(() => _requestPieces(p));
+        }
+      });
     }
-    _timeoutRequest.add([index, begin, length, peer]);
-    return true;
-  }
-
-  bool _removeTimeoutRequest(int index, int begin, int length) {
-    var di;
-    for (var i = 0; i < _timeoutRequest.length; i++) {
-      var r = _timeoutRequest[i];
-      if (r[0] == index && r[1] == begin && r[2] == length) {
-        di = i;
-        break;
-      }
-    }
-    if (di != null) {
-      _timeoutRequest.removeAt(di);
-      return true;
-    }
-    return false;
   }
 
   void _sendKeepAliveToAll() {
@@ -764,7 +735,6 @@ class PeersManager {
     _flushIndicesBuffer?.clear();
     _allcompletehandles?.clear();
     _noActivePeerhandles?.clear();
-    _timeoutRequest?.clear();
     _remoteRequest?.clear();
     _pausedRequest?.clear();
     _pausedRemoteRequest?.clear();
@@ -779,7 +749,5 @@ class PeersManager {
       peers.clear();
     };
     await _disposePeers(_activePeers);
-
-    _timeoutRequest.clear();
   }
 }
