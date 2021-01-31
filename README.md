@@ -7,6 +7,7 @@ Whole Dart Torrent client contains serival parts :
 - [DHT](https://pub.dev/packages/dht_dart)
 - [Torrent model](https://pub.dev/packages/torrent_model)
 - [Common library](https://pub.dev/packages/dartorrent_common)
+- [UTP](https://pub.dev/packages/utp)
 
 This package implements regular BitTorrent Protocol and manage above packages to work together for downloading.
 
@@ -16,12 +17,12 @@ This package implements regular BitTorrent Protocol and manage above packages to
 - [BEP 0006 Fast Extension]
 - [BEP 0010	Extension Protocol]
 - [BEP 0011	Peer Exchange (PEX)]
+- [BEP 0014 Local Service Discovery]
 - [BEP 0015 UDP Tracker Protocal]
+- [BEP 0029 uTorrent transport protocol]
+- [BEP 0055 Holepunch extension]
 
 Developing:
-- [BEP 0029 uTorrent transport protocol]
-- [BEP 0014 Local Service Discovery]
-- [BEP 0055 Holepunch extension]
 - [BEP 0009	Extension for Peers to Send Metadata Files]
 
 Other support will come soon.

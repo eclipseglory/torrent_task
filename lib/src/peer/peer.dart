@@ -302,6 +302,7 @@ abstract class Peer
       });
       fireConnectEvent();
     } catch (e) {
+      if (e is TCPConnectException) return dispose(e);
       return dispose(BadException(e));
     }
   }
@@ -522,13 +523,12 @@ abstract class Peer
     super.processExtendHandshake(data);
   }
 
-  void sendExtendMessage(String name, dynamic data) {
+  void sendExtendMessage(String name, List<int> data) {
     var id = getExtendedEventId(name);
     if (id != null) {
       var message = <int>[];
       message.add(id);
-      var m = encode(data);
-      message.addAll(m);
+      message.addAll(data);
       sendMessage(ID_EXTENDED, message);
     }
   }
@@ -760,7 +760,7 @@ abstract class Peer
     var length = 0;
     if (message != null) length = message.length;
     length = length + 1;
-    var datas = List<int>(length + 4);
+    var datas = List<int>.filled(length + 4, 0);
     var head = Uint8List(4);
     var view1 = ByteData.view(head.buffer);
     view1.setUint32(0, length, Endian.big);
@@ -1161,6 +1161,11 @@ class BadException implements Exception {
   }
 }
 
+class TCPConnectException implements Exception {
+  final Exception _e;
+  TCPConnectException(this._e);
+}
+
 class _TCPPeer extends Peer {
   Socket _socket;
   _TCPPeer(String localPeerId, CompactAddress address, List<int> infoHashBuffer,
@@ -1174,9 +1179,13 @@ class _TCPPeer extends Peer {
   @override
   Future<Stream> connectRemote(int timeout) async {
     timeout ??= 30;
-    _socket ??= await Socket.connect(address.address, address.port,
-        timeout: Duration(seconds: timeout));
-    return _socket;
+    try {
+      _socket ??= await Socket.connect(address.address, address.port,
+          timeout: Duration(seconds: timeout));
+      return _socket;
+    } catch (e) {
+      throw TCPConnectException(e);
+    }
   }
 
   @override

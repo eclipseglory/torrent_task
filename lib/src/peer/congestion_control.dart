@@ -74,6 +74,7 @@ mixin CongestionControl {
     var requests = currentRequestBuffer;
     if (requests == null || requests.isEmpty) return;
     _timeout = Timer(Duration(microseconds: _rto.toInt()), () {
+      if (requests.isEmpty) return;
       if (times + 1 >= 5) {
         timeOutErrorHappen();
         return;

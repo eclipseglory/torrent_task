@@ -11,6 +11,7 @@ import 'package:utp/utp.dart';
 
 import 'file/download_file_manager.dart';
 import 'file/state_file.dart';
+import 'lsd/lsd.dart';
 import 'peer/peer.dart';
 import 'piece/base_piece_selector.dart';
 import 'piece/piece_manager.dart';
@@ -43,6 +44,13 @@ abstract class TorrentTask {
 
   /// Average upload speed
   double get averageUploadSpeed;
+
+  // TODO debug:
+  double get utpDownloadSpeed;
+  // TODO debug:
+  double get utpUploadSpeed;
+  // TODO debug:
+  int get utpPeerCount;
 
   /// Downloaded total bytes length
   int get downloaded;
@@ -114,6 +122,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   DHT _dht;
 
+  LSD _lsd;
+
   StateFile _stateFile;
 
   PieceManager _pieceManager;
@@ -182,6 +192,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   Future<PeersManager> _init(Torrent model, String savePath) async {
     _dht = DHT();
+    _lsd = LSD(model.infoHash, _peerId);
     _infoHashString = String.fromCharCodes(model.infoHashBuffer);
     _tracker ??= TorrentAnnounceTracker(this);
     _stateFile ??= await StateFile.getStateFile(savePath, model);
@@ -218,6 +229,10 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
         _processNewPeerFound(url);
       });
     }
+  }
+
+  void _processLSDPeerEvent(CompactAddress address, String infoHash) {
+    print('居然有LSD！！');
   }
 
   void _processNewPeerFound(CompactAddress url) {
@@ -281,7 +296,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
     await _init(_metaInfo, _savePath);
     _serverSocket.listen(_hookInPeer);
-
     // _utpServer ??= await ServerUTPSocket.bind(InternetAddress.anyIPv4, 0);
     // _utpServer.listen(_hookUTP);
     // print(_utpServer.port);
@@ -298,6 +312,10 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _tracker.onPeerEvent(_processTrackerPeerEvent);
     _peersManager.onAllComplete(_whenTaskDownloadComplete);
     _fileManager.onFileComplete(_whenFileDownloadComplete);
+
+    _lsd.onLSDPeer(_processLSDPeerEvent);
+    _lsd.port = _serverSocket.port;
+    _lsd.start();
 
     _dht.announce(
         String.fromCharCodes(_metaInfo.infoHashBuffer), _serverSocket.port);
@@ -484,6 +502,24 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     } else {
       return 0;
     }
+  }
+
+  // TODO debug:
+  double get utpDownloadSpeed {
+    if (_peersManager == null) return 0.0;
+    return _peersManager.utpDownloadSpeed;
+  }
+
+// TODO debug:
+  double get utpUploadSpeed {
+    if (_peersManager == null) return 0.0;
+    return _peersManager.utpUploadSpeed;
+  }
+
+// TODO debug:
+  int get utpPeerCount {
+    if (_peersManager == null) return 0;
+    return _peersManager.utpPeerCount;
   }
 
   @override

@@ -20,3 +20,9 @@
 ## 0.1.4
 - Fix some issues
 - Fix peer download slow issue
+
+## 0.2.0
+- Add UTP support
+- Add holepunch extension
+- Add LSD extension
+- Fix PEX extension bugs

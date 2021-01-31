@@ -4,6 +4,9 @@ import 'dart:io';
 
 import 'package:torrent_model/torrent_model.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:torrent_task/src/peer/holepunch.dart';
+import 'package:torrent_task/src/peer/pex.dart';
+import 'package:utp/utp.dart';
 
 import 'bitfield.dart';
 import 'peer.dart';
@@ -22,7 +25,7 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 ///
 /// TODO:
 /// - 没有处理对外的Suggest Piece/Fast Allow
-class PeersManager {
+class PeersManager with Holepunch, PEX {
   final List<InternetAddress> IGNORE_IPS = [
     InternetAddress.tryParse('0.0.0.0'),
     InternetAddress.tryParse('127.0.0.1')
@@ -37,8 +40,6 @@ class PeersManager {
   final Set<CompactAddress> _peersAddress = {};
 
   final Set<InternetAddress> _incomingAddress = {};
-
-  final Set<CompactAddress> _lastUTPEX = {};
 
   InternetAddress localExtenelIP;
 
@@ -79,8 +80,6 @@ class PeersManager {
 
   final Map<String, List> _pausedRemoteRequest = {};
 
-  Timer _ut_pex_timer;
-
   final String _localPeerId;
 
   PeersManager(this._localPeerId, this._pieceManager, this._pieceProvider,
@@ -94,9 +93,8 @@ class PeersManager {
     _fileManager.onSubPieceReadComplete(readSubPieceComplete);
     _pieceManager.onPieceComplete(_processPieceWriteComplete);
 
-    _ut_pex_timer = Timer.periodic(Duration(seconds: 60), (timer) {
-      _sendUt_pex_peers();
-    });
+    // Start pex interval
+    startPEX();
   }
 
   /// Task is paused
@@ -200,6 +198,7 @@ class PeersManager {
   /// 支持哪些扩展在这里添加
   void _registerExtended(Peer peer) {
     peer.registerExtened('ut_pex');
+    peer.registerExtened('ut_holepunch');
   }
 
   void unHookPeer(Peer peer) {
@@ -225,50 +224,12 @@ class PeersManager {
     return _activePeers.contains(id);
   }
 
-  List<CompactAddress> _parsePEXData(var added,
-      [InternetAddressType type = InternetAddressType.IPv4]) {
-    if (added != null && added is List && added.isNotEmpty) {
-      var intList;
-      if (added is! List<int>) {
-        intList = <int>[];
-        for (var i = 0; i < added.length; i++) {
-          var n = added[i];
-          if (n is int && n >= 0 && n < 256) {
-            intList.add(n);
-          } else {
-            return null;
-          }
-        }
-        added = intList;
-      }
-      if (type == InternetAddressType.IPv4) {
-        return CompactAddress.parseIPv4Addresses(added);
-      }
-      if (type == InternetAddressType.IPv6) {
-        return CompactAddress.parseIPv6Addresses(added);
-      }
-    }
-    return null;
-  }
-
   void _processExtendedMessage(dynamic source, String name, dynamic data) {
+    if (name == 'ut_holepunch') {
+      parseHolepuchMessage(data);
+    }
     if (name == 'ut_pex') {
-      try {
-        var cas = _parsePEXData(data['added']);
-        if (cas != null) {
-          cas.forEach((address) {
-            Timer.run(() => addNewPeerAddress(address));
-          });
-        }
-        cas = _parsePEXData(data['added6'], InternetAddressType.IPv6);
-        if (cas != null) {
-          cas.forEach((address) {
-            Timer.run(() => addNewPeerAddress(address));
-          });
-        }
-      } catch (e) {
-        log('parse pex ips error', error: e, name: runtimeType.toString());
-      }
+      parsePEXDatas(source, data);
     }
     if (name == 'handshake') {
       if (localExtenelIP != null &&
@@ -313,35 +274,6 @@ class PeersManager {
       }
       if (peer != null) _hookPeer(peer);
     }
-  }
-
-  void _sendUt_pex_peers() {
-    var dropped = <CompactAddress>[];
-    var added = <CompactAddress>[];
-    _activePeers.forEach((p) {
-      if (!_lastUTPEX.remove(p.address)) {
-        added.add(p.address);
-      }
-    });
-    _lastUTPEX.forEach((element) {
-      dropped.add(element);
-    });
-    _lastUTPEX.clear();
-
-    var data = {};
-    data['added'] = [];
-    added.forEach((element) {
-      _lastUTPEX.add(element);
-      data['added'].addAll(element.toBytes());
-    });
-    data['dropped'] = [];
-    dropped.forEach((element) {
-      data['dropped'].addAll(element.toBytes());
-    });
-    if (data['added'].isEmpty && data['dropped'].isEmpty) return;
-    _activePeers.forEach((peer) {
-      peer.sendExtendMessage('ut_pex', data);
-    });
   }
 
   void _processSubPieceWriteComplte(int pieceIndex, int begin, int length) {
@@ -459,6 +391,7 @@ class PeersManager {
     if (reason is BadException) {
       reconnect = false;
     }
+
     _peersAddress.remove(peer.address);
     _incomingAddress.remove(peer.address.address);
     _activePeers.remove(peer);
@@ -481,6 +414,13 @@ class PeersManager {
     tempIndex.forEach((index) {
       _pausedRequest.removeAt(index);
     });
+
+    if (reason is TCPConnectException) {
+      // print('TCPConnectException');
+      addNewPeerAddress(peer.address,PeerType.UTP);
+      return;
+    }
+
     if (reconnect) {
       if (_activePeers.length < MAX_ACTIVE_PEERS && !isDisposed) {
         // print(
@@ -720,17 +660,14 @@ class PeersManager {
   Future dispose() async {
     if (isDisposed) return;
     _disposed = true;
-
+    clearHolepunch();
+    clearPEX();
     _endTime = DateTime.now().millisecondsSinceEpoch;
-
-    _ut_pex_timer?.cancel();
-    _ut_pex_timer = null;
 
     _fileManager.offSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.offSubPieceReadComplete(readSubPieceComplete);
     _pieceManager.offPieceComplete(_processPieceWriteComplete);
 
-    // await _fileManager.flushPiece(_flushBuffer.toList());
     await _flushFiles(_flushIndicesBuffer);
     _flushIndicesBuffer?.clear();
     _allcompletehandles?.clear();
@@ -749,5 +686,74 @@ class PeersManager {
       peers.clear();
     };
     await _disposePeers(_activePeers);
+  }
+
+  //TODO test:
+
+  @override
+  void addPEXPeer(dynamic source, CompactAddress address, Map options) {
+    // addNewPeerAddress(address);
+    // return;
+    // if (options['reachable'] != null) {
+    //   if (options['utp'] != null) {
+    //     print('UTP/TCP reachable');
+    //   }
+    //   addNewPeerAddress(address);
+    //   return;
+    // }
+    if ((options['utp'] != null || options['ut_holepunch'] != null) &&
+        options['reachable'] == null) {
+      var peer = source as Peer;
+      var message = getRendezvousMessage(address);
+      peer.sendExtendMessage('ut_holepunch', message);
+      return;
+    }
+    addNewPeerAddress(address);
+  }
+
+  @override
+  Iterable<Peer> get activePeers => _activePeers;
+
+  @override
+  void holePunchConnect(CompactAddress ip) {
+    addNewPeerAddress(ip, PeerType.UTP);
+  }
+
+  int get utpPeerCount {
+    return _activePeers.fold(0, (previousValue, element) {
+      if (element.type == PeerType.UTP) {
+        previousValue += 1;
+      }
+      return previousValue;
+    });
+  }
+
+  double get utpDownloadSpeed {
+    return _activePeers.fold(0.0, (previousValue, element) {
+      if (element.type == PeerType.UTP) {
+        previousValue += element.currentSpeed;
+      }
+      return previousValue;
+    });
+  }
+
+  double get utpUploadSpeed {
+    return _activePeers.fold(0.0, (previousValue, element) {
+      if (element.type == PeerType.UTP) {
+        previousValue += element.averageUploadSpeed;
+      }
+      return previousValue;
+    });
+  }
+
+  @override
+  void holePunchError(String err, CompactAddress ip) {
+    // print('holepunch error - $err');
+  }
+
+  @override
+  void holePunchRendezvous(CompactAddress ip) {
+    // TODO: implement holePunchRendezvous
+    print('收到 holePunch Rendezvous');
   }
 }

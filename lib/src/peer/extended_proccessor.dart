@@ -7,9 +7,15 @@ mixin ExtendedProcessor {
   final Map<int, String> _extendedEventMap = {};
   int _id = 1;
   Map _rawMap;
-  final Map<String, int> _localExtended = <String, int>{};
+  final Map<int, String> _localExtended = <int, String>{};
 
-  Map<String, int> get localExtened => _localExtended;
+  Map<String, int> get localExtened {
+    var map = <String, int>{};
+    _localExtended.forEach((key, value) {
+      map[value] = key;
+    });
+    return map;
+  }
 
   final Set<void Function(dynamic source, String eventName, dynamic data)>
       _eventHandler = {};
@@ -25,7 +31,7 @@ mixin ExtendedProcessor {
   }
 
   void registerExtened(String name) {
-    _localExtended[name] = _id;
+    _localExtended[_id] = name;
     _id++;
   }
 
@@ -37,13 +43,13 @@ mixin ExtendedProcessor {
   }
 
   void processExtendMessage(int id, Uint8List message) {
-    var data = decode(message);
     if (id == 0) {
+      var data = decode(message);
       processExtendHandshake(data);
     } else {
-      var name = _extendedEventMap[id];
+      var name = _localExtended[id];
       if (name != null) {
-        _fireExtendedEvent(name, data);
+        _fireExtendedEvent(name, message);
       }
     }
   }
