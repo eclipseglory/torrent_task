@@ -62,11 +62,6 @@ class Piece {
     return _subPiecesQueue.isNotEmpty;
   }
 
-  bool haveAvalidatePeers() {
-    if (_subPiecesCount == 0) return false;
-    return _avalidatePeers.isNotEmpty;
-  }
-
   int get avalidatePeersCount => _avalidatePeers.length;
 
   int get avalidateSubPieceCount {
@@ -108,6 +103,7 @@ class Piece {
 
   bool subPieceWriteComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
+    // _subPiecesQueue.remove(subindex); // 有这可能？
     _writtingSubPieces.remove(subindex);
     var re = _downloadedSubPieces.add(subindex);
     if (isCompleted) {
@@ -132,18 +128,6 @@ class Piece {
     return subPieceQueue?.remove(subIndex);
   }
 
-  void addAvalidatePeers(List<String> peers) {
-    peers.forEach((id) {
-      _avalidatePeers.add(id);
-    });
-  }
-
-  void removeAvalidatePeers(List<String> peers) {
-    peers.forEach((id) {
-      _avalidatePeers.remove(id);
-    });
-  }
-
   bool addAvalidatePeer(String id) {
     return _avalidatePeers.add(id);
   }
@@ -157,21 +141,41 @@ class Piece {
   }
 
   int popSubPiece() {
-    return subPieceQueue.removeFirst();
+    if (subPieceQueue.isNotEmpty) return subPieceQueue.removeFirst();
+    return null;
   }
 
-  void pushSubPiece(int subIndex) {
-    if (subPieceQueue.contains(subIndex)) return;
+  bool pushSubPiece(int subIndex) {
+    if (subPieceQueue.contains(subIndex) ||
+        _writtingSubPieces.contains(subIndex) ||
+        _downloadedSubPieces.contains(subIndex)) return false;
     subPieceQueue.addFirst(subIndex);
+    return true;
   }
 
   int popLastSubPiece() {
-    return subPieceQueue.removeLast();
+    if (subPieceQueue.isNotEmpty) return subPieceQueue.removeLast();
+    return null;
   }
 
-  void pushSubPieceLast(int index) {
-    if (subPieceQueue.contains(index)) return;
+  bool pushSubPieceLast(int index) {
+    if (subPieceQueue.contains(index) ||
+        _writtingSubPieces.contains(index) ||
+        _downloadedSubPieces.contains(index)) return false;
     subPieceQueue.addLast(index);
+    return true;
+  }
+
+  bool _disposed = false;
+
+  bool get isDisposed => _disposed;
+
+  void dispose() {
+    if (isDisposed) return;
+    _disposed = true;
+    _avalidatePeers.clear();
+    _downloadedSubPieces.clear();
+    _writtingSubPieces.clear();
   }
 
   @override

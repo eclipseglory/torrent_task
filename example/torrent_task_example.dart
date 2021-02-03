@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dartorrent_common/dartorrent_common.dart';
 import 'package:torrent_model/torrent_model.dart';
@@ -6,7 +7,7 @@ import 'package:torrent_task/torrent_task.dart';
 
 void main() async {
   try {
-    var torrentFile = 'example/dhb.torrent';
+    var torrentFile = 'example/test4.torrent';
     var savePath = 'g:/bttest';
     var model = await Torrent.parse(torrentFile);
     // model.announces.clear();
@@ -36,7 +37,6 @@ void main() async {
     model.nodes?.forEach((element) {
       task.addDHTNode(element);
     });
-
     print(map);
 
     timer = Timer.periodic(Duration(seconds: 2), (timer) async {

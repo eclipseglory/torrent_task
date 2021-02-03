@@ -11,7 +11,7 @@ typedef PieceCompleteHandle = void Function(int pieceIndex);
 class PieceManager implements PieceProvider {
   bool _isFirst = true;
 
-  List<Piece> _pieces;
+  final Map<int, Piece> _pieces = {};
 
   // final Set<int> _completedPieces = <int>{};
 
@@ -21,9 +21,7 @@ class PieceManager implements PieceProvider {
 
   final PieceSelector _pieceSelector;
 
-  PieceManager(this._pieceSelector, int piecesNumber) {
-    _pieces = List<Piece>(piecesNumber);
-  }
+  PieceManager(this._pieceSelector, int piecesNumber);
 
   static PieceManager createPieceManager(
       PieceSelector pieceSelector, Torrent metaInfo, Bitfield bitfield) {
@@ -51,12 +49,6 @@ class PieceManager implements PieceProvider {
     _pieceCompleteHandles.remove(handle);
   }
 
-  bool isPieceCompleted(int index) {
-    if (index < 0 || index >= _pieces.length) return false;
-    var piece = _pieces[index];
-    return piece.isCompleted;
-  }
-
   /// 这个接口是用于FIleManager回调使用。
   ///
   /// 只有所有子Piece写入完成才认为该Piece算完成。
@@ -80,7 +72,7 @@ class PieceManager implements PieceProvider {
       for (var i = 0; i < suggestPieces.length; i++) {
         var p = _pieces[suggestPieces.elementAt(i)];
         if (p != null && p.haveAvalidateSubPiece()) {
-          processDownloadingPiece(remotePeerId, p.index, remoteHavePieces);
+          processDownloadingPiece(p.index);
           return p;
         }
       }
@@ -102,54 +94,12 @@ class PieceManager implements PieceProvider {
         remotePeerId, candidatePieces, this, _isFirst);
     _isFirst = false;
     if (piece == null) return null;
-    processDownloadingPiece(remotePeerId, piece.index, remoteHavePieces);
+    processDownloadingPiece(piece.index);
     return piece;
   }
 
-  void processDownloadingPiece(
-      String peerId, int pieceIndex, List<int> remoteHavePieces) {
-    // 该peer被占用，修改其他piece的avalidate peer
-    remoteHavePieces.forEach((index) {
-      _pieces[index]?.removeAvalidatePeer(peerId);
-    });
+  void processDownloadingPiece(int pieceIndex) {
     _donwloadingPieces.add(pieceIndex);
-  }
-
-  /// 当有数据收到时，需要确定下一次要使用的piece。
-  ///
-  /// 下载的时候需要保证某一个Piece能尽快完成，这个方法会在Piece收到部分数据后:
-  /// - 如果还有可下载的sun piece，返回[pieceIndex]，继续下载
-  /// - 如果没有可下载的sun piece, 返回 -1，并且会将[remoteHavePieces]中
-  /// 所有的Piece的`avalidatePeers`加入当前[peerId]，并且如果该Piece已经全部完成
-  /// 会将它从下载列表和当前pieces列表中删除
-  ///
-  int selectPieceWhenReceiveData(
-      String peerId, List<int> remoteHavePieces, int pieceIndex, int begin) {
-    // 这是逻辑上的可能性，实际上不会发生，如果触发下面的判断内代码，只能说明其他地方某处没写对
-    if (_pieces[pieceIndex] == null || _pieces[pieceIndex].isCompleted) {
-      _setAvalidatePeerForPieces(peerId, remoteHavePieces);
-      _processCompletePiece(pieceIndex);
-      return -1;
-    }
-    var piece = _pieces[pieceIndex];
-    piece.subPieceDownloadComplete(begin);
-
-    if (piece.haveAvalidateSubPiece()) return pieceIndex;
-    // 不能继续下载的话，就要重置peer的一些数据
-    // print('$pieceIndex 没有可用sub piece，无法继续下载');
-    _setAvalidatePeerForPieces(peerId, remoteHavePieces);
-    // **NOTE** 没有可下载子piece并不一定就完成了，可能有一些在下载中
-    if (piece.isCompleted) {
-      _processCompletePiece(pieceIndex);
-    }
-    return -1;
-  }
-
-  /// 为给出的[piecesIndex]的所有`Piece`加上avalidate peer ([id])
-  void _setAvalidatePeerForPieces(String id, List<int> piecesIndex) {
-    piecesIndex.forEach((index) {
-      _pieces[index]?.addAvalidatePeer(id);
-    });
   }
 
   /// 完成后的Piece需要一些处理
@@ -157,12 +107,29 @@ class PieceManager implements PieceProvider {
   /// - 从`_downloadingPieces`列表中删除
   /// - 通知监听器
   void _processCompletePiece(int index) {
-    if (_pieces[index] == null) return;
-    _pieces[index] = null;
+    var piece = _pieces.remove(index);
     _donwloadingPieces.remove(index);
-    _pieceCompleteHandles.forEach((handle) {
-      Timer.run(() => handle(index));
+    if (piece != null) {
+      piece.dispose();
+      _pieceCompleteHandles.forEach((handle) {
+        Timer.run(() => handle(index));
+      });
+    }
+  }
+
+  bool _disposed = false;
+
+  bool get isDisposed => _disposed;
+
+  void dispose() {
+    if (isDisposed) return;
+    _disposed = true;
+    _pieces.forEach((key, value) {
+      value.dispose();
     });
+    _pieces.clear();
+    _pieceCompleteHandles.clear();
+    _donwloadingPieces.clear();
   }
 
   @override

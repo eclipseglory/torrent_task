@@ -1,12 +1,8 @@
 import 'dart:async';
-import 'dart:developer';
 import 'dart:io';
 
 import 'package:torrent_model/torrent_model.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/src/peer/holepunch.dart';
-import 'package:torrent_task/src/peer/pex.dart';
-import 'package:utp/utp.dart';
 
 import 'bitfield.dart';
 import 'peer.dart';
@@ -15,6 +11,8 @@ import '../piece/piece_manager.dart';
 import '../piece/piece.dart';
 import '../piece/piece_provider.dart';
 import '../utils.dart';
+import '../peer/pex.dart';
+import '../peer/holepunch.dart';
 
 const MAX_ACTIVE_PEERS = 50;
 
@@ -160,7 +158,8 @@ class PeersManager with Holepunch, PEX {
   /// This speed caculation: sum(`active peer download speed`)
   double get currentDownloadSpeed {
     if (_activePeers == null || _activePeers.isEmpty) return 0.0;
-    return _activePeers.fold(0.0, (p, element) => p + element.currentSpeed);
+    return _activePeers.fold(
+        0.0, (p, element) => p + element.currentDownloadSpeed);
   }
 
   /// Current upload speed , b/ms
@@ -360,8 +359,8 @@ class PeersManager with Holepunch, PEX {
     var peer = source as Peer;
     var piece = _pieceProvider[index];
     if (piece != null && piece.haveAvalidateSubPiece()) {
-      _pieceManager.processDownloadingPiece(
-          peer.id, index, peer.remoteBitfield.completedPieces);
+      piece.addAvalidatePeer(peer.id);
+      _pieceManager.processDownloadingPiece(index);
       _requestPieces(source, index);
     }
   }
@@ -417,20 +416,16 @@ class PeersManager with Holepunch, PEX {
 
     if (reason is TCPConnectException) {
       // print('TCPConnectException');
-      addNewPeerAddress(peer.address,PeerType.UTP);
+      // addNewPeerAddress(peer.address, PeerType.UTP);
       return;
     }
 
     if (reconnect) {
       if (_activePeers.length < MAX_ACTIVE_PEERS && !isDisposed) {
-        // print(
-        //     '准备重新连接 ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
         addNewPeerAddress(peer.address, peer.type);
       }
     } else {
       if (peer.isSeeder && !_fileManager.isAllComplete && !isDisposed) {
-        // print(
-        //     '准备重新连接Seeder ${peer.address},掉线原因:$reason,DL:${peer.downloaded}(${((peer.downloadSpeed) * 1000 / 1024).toStringAsFixed(2)}),UL:${peer.uploaded}(${((peer.uploadSpeed) * 1000 / 1024).toStringAsFixed(2)})');
         addNewPeerAddress(peer.address, peer.type);
       }
     }
@@ -444,31 +439,72 @@ class PeersManager with Holepunch, PEX {
     peer.sendHandShake();
   }
 
-  void _requestPieces(dynamic source, [int pieceIndex = -1]) {
+  void _requestPieces(dynamic source, [int pieceIndex = -1]) async {
     if (isPaused) {
       _pausedRequest.add([source, pieceIndex]);
       return;
     }
     var peer = source as Peer;
+
+    // TODO : 0.2.1 代码：
+    // Piece piece;
+    // if (pieceIndex != -1) {
+    //   piece = _pieceProvider[pieceIndex];
+    // } else {
+    //   piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
+    //       _pieceProvider, peer.remoteSuggestPieces);
+    // }
+    // if (piece == null) return;
+
+    // var flag = true;
+    // for (var i = 0; i < 5; i++) {
+    //   var subIndex = piece.popSubPiece();
+    //   if (subIndex == null) {
+    //     flag = false;
+    //     break;
+    //   }
+    //   var size = DEFAULT_REQUEST_LENGTH; // block大小现算
+    //   var begin = subIndex * size;
+    //   if ((begin + size) > piece.byteLength) {
+    //     size = piece.byteLength - begin;
+    //   }
+    //   // print('${peer.id} : ${peer.allowWindow}');
+    //   if (!peer.sendRequest(piece.index, begin, size)) {
+    //     piece.pushSubPiece(subIndex);
+    //     flag = false;
+    //     break;
+    //   } else {
+    //     _requestPieces(peer); // 疯狂请求资源
+    //   }
+    // }
+    // if (flag) _requestPieces(peer);
+
+    // TODO : 0.2.0 代码：
     Piece piece;
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
+      if (!piece.haveAvalidateSubPiece()) {
+        piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
+            _pieceProvider, peer.remoteSuggestPieces);
+      }
     } else {
       piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
           _pieceProvider, peer.remoteSuggestPieces);
     }
     if (piece == null) return;
+
     var subIndex = piece.popSubPiece();
     var size = DEFAULT_REQUEST_LENGTH; // block大小现算
     var begin = subIndex * size;
     if ((begin + size) > piece.byteLength) {
       size = piece.byteLength - begin;
     }
-
+    // print('${peer.id} : ${peer.allowWindow}');
     if (!peer.sendRequest(piece.index, begin, size)) {
       piece.pushSubPiece(subIndex);
     } else {
-      _requestPieces(peer); // 疯狂请求资源
+      Timer.run(() => _requestPieces(peer, pieceIndex));
+      // _requestPieces(peer, pieceIndex); // 疯狂请求资源
     }
   }
 
@@ -476,10 +512,15 @@ class PeersManager with Holepunch, PEX {
       dynamic source, int index, int begin, List<int> block) {
     var peer = source as Peer;
     _downloaded += block.length;
-    _fileManager.writeFile(index, begin, block);
-    var nextIndex = _pieceManager.selectPieceWhenReceiveData(
-        peer.id, peer.remoteCompletePieces, index, begin);
-    _requestPieces(peer, nextIndex);
+
+    var piece = _pieceManager[index];
+    if (piece != null) {
+      var i = index;
+      Timer.run(() => _fileManager.writeFile(i, begin, block));
+      piece.subPieceDownloadComplete(begin);
+      if (piece.haveAvalidateSubPiece()) index = -1;
+    }
+    Timer.run(() => _requestPieces(peer, index));
   }
 
   void _processPeerHandshake(dynamic source, String remotePeerId, data) {
@@ -531,10 +572,15 @@ class PeersManager with Holepunch, PEX {
 
   void _processHaveUpdate(dynamic source, int index) {
     var peer = source as Peer;
+    if (_pieceProvider[index] == null) return;
+
     if (!_fileManager.localHave(index)) {
-      peer.sendInterested(true);
-      _pieceProvider[index]?.addAvalidatePeer(peer.id);
-      Timer.run(() => _requestPieces(peer));
+      if (peer.chokeMe) {
+        peer.sendInterested(true);
+      } else {
+        _pieceProvider[index]?.addAvalidatePeer(peer.id);
+        if (peer.isSleeping) Timer.run(() => _requestPieces(peer));
+      }
     }
   }
 
@@ -731,7 +777,7 @@ class PeersManager with Holepunch, PEX {
   double get utpDownloadSpeed {
     return _activePeers.fold(0.0, (previousValue, element) {
       if (element.type == PeerType.UTP) {
-        previousValue += element.currentSpeed;
+        previousValue += element.currentDownloadSpeed;
       }
       return previousValue;
     });

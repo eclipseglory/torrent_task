@@ -3,7 +3,8 @@ import 'dart:io';
 
 import 'package:bencode_dart/bencode_dart.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/src/peer/peer.dart';
+
+import '../peer/peer.dart';
 
 const pex_flag_prefers_encryption = 0x01;
 

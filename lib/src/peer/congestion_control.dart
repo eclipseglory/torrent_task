@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:math';
 
-/// 100 ms
+import '../utils.dart';
+
+/// 500 ms
 const CCONTROL_TARGET = 1000000;
+
+const MAX_WINDOW = 1048576;
 
 const RECORD_TIME = 5000000;
 
 /// 最大每次增加的request为3
-const MAX_CWND_INCREASE_REQUESTS_PER_RTT = 3;
+const MAX_CWND_INCREASE_REQUESTS_PER_RTT = 3 * 16384;
 
 /// LEDBAT拥塞控制
 ///
@@ -22,7 +26,7 @@ mixin CongestionControl {
 
   Timer _timeout;
 
-  int _currentDownloaded = 0;
+  int _allowWindowSize = DEFAULT_REQUEST_LENGTH;
 
   final List<List<dynamic>> _downloadedHistory = <List<dynamic>>[];
 
@@ -100,40 +104,42 @@ mixin CongestionControl {
     });
   }
 
-  void ackRequest(List<int> request) {
-    // 重发后收到的不管
-    if (request == null || request[4] != 0) return;
-    var now = DateTime.now().microsecondsSinceEpoch;
-    var rtt = now - request[3];
-    updateRTO(rtt);
-
-    _downloadedHistory.add([request[2], DateTime.now().microsecondsSinceEpoch]);
-    _currentDownloaded += request[2];
+  void ackRequest(List<List<int>> requests) {
+    if (requests.isEmpty) return;
+    var downloaded = 0;
+    int minRtt;
+    requests.forEach((request) {
+      // 重发后收到的不管
+      if (request == null || request[4] != 0) return;
+      var now = DateTime.now().microsecondsSinceEpoch;
+      var rtt = now - request[3];
+      minRtt ??= rtt;
+      minRtt = min(minRtt, rtt);
+      updateRTO(rtt);
+      downloaded += request[2];
+    });
+    if (downloaded == 0) return;
+    var artt = minRtt;
+    var off_target1 = (CCONTROL_TARGET - artt) / CCONTROL_TARGET;
+    //  The window size in the socket structure specifies the number of bytes we may have in flight (not acked) in total,
+    //  on the connection. The send rate is directly correlated to this window size. The more bytes in flight, the faster
+    //   send rate. In the code, the window size is called max_window. Its size is controlled, roughly, by the following expression:
+    var delay_factor = off_target1;
+    var window_factor = downloaded / _allowWindowSize;
+    var scaled_gain =
+        MAX_CWND_INCREASE_REQUESTS_PER_RTT * delay_factor * window_factor;
+    // Where the first factor scales the off_target to units of target delays.
+    // The scaled_gain is then added to the max_window:
+    _allowWindowSize += scaled_gain.toInt();
+    _allowWindowSize = max(DEFAULT_REQUEST_LENGTH, _allowWindowSize);
+    _allowWindowSize = min(MAX_WINDOW, _allowWindowSize);
   }
 
-  void _updateDownloaded() {
-    if (_downloadedHistory.isEmpty) return;
-    var now = DateTime.now().microsecondsSinceEpoch;
-    var first = _downloadedHistory.first;
-    while ((now - first[1]) > RECORD_TIME) {
-      var d = _downloadedHistory.removeAt(0);
-      _currentDownloaded -= d[0];
-      if (_downloadedHistory.isEmpty) break;
-      first = _downloadedHistory.first;
-    }
-  }
-
-  /// 当前下载速度。
-  ///
-  /// 5秒钟内的平均速度
-  double get currentSpeed {
-    _updateDownloaded();
-    if (_downloadedHistory.isEmpty) return 0.0;
-    var now = DateTime.now().microsecondsSinceEpoch;
-    var start = _downloadedHistory.first[1];
-    var passed = now - start;
-    if (passed == 0) return 0.0;
-    return _currentDownloaded / (passed / 1000);
+  int get currentWindow {
+    var c = _allowWindowSize ~/ DEFAULT_REQUEST_LENGTH;
+    // var cw = 2 + (currentSpeed * 500 / DEFAULT_REQUEST_LENGTH).ceil();
+    // print('$cw, $c');
+    return c;
   }
 
   void clearCC() {

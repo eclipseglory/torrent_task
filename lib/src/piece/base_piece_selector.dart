@@ -21,7 +21,9 @@ class BasePieceSelector implements PieceSelector {
     var startIndex;
     for (var i = 0; i < piecesIndexList.length; i++) {
       var p = provider[piecesIndexList[i]];
-      if (p != null && p.haveAvalidateSubPiece() && p.haveAvalidatePeers()) {
+      if (p != null &&
+          p.haveAvalidateSubPiece() &&
+          p.containsAvalidatePeer(remotePeerId)) {
         a = p;
         startIndex = i;
         break;
@@ -31,7 +33,9 @@ class BasePieceSelector implements PieceSelector {
     maxList.add(a);
     for (var i = startIndex; i < piecesIndexList.length; i++) {
       var p = provider[piecesIndexList[i]];
-      if (p == null || !p.haveAvalidateSubPiece() || !p.haveAvalidatePeers()) {
+      if (p == null ||
+          !p.haveAvalidateSubPiece() ||
+          !p.containsAvalidatePeer(remotePeerId)) {
         continue;
       }
       // 选择稀有piece

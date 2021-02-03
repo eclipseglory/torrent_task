@@ -229,7 +229,7 @@ class DownloadFileManager {
     var blockSize = block.length;
     var pe = ps + blockSize;
     if (tempFiles == null || tempFiles.isEmpty) return;
-    var futures = <Future>[];
+    var futures = <Future<bool>>[];
     for (var i = 0; i < tempFiles.length; i++) {
       var tempFile = tempFiles[i];
       var re = _mapDownloadFilePosition(ps, pe, blockSize, tempFile);

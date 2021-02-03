@@ -33,7 +33,7 @@ This package need to dependency [`torrent_model`](https://pub.dev/packages/torre
 ```
 dependencies:
   torrent_model : ^1.0.3
-  torrent_task : ^0.1.2
+  torrent_task : '>= 0.2.1 < 2.0.0'
 ```
 
 First , create a `Torrent` model via .torrent file:

@@ -5,15 +5,16 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:bencode_dart/bencode_dart.dart';
-import 'package:torrent_task/src/peer/extended_proccessor.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/src/peer/congestion_control.dart';
 import 'package:torrent_task/torrent_task.dart';
 import 'package:utp/utp.dart';
 
 import '../utils.dart';
 import 'bitfield.dart';
 import 'peer_event_dispatcher.dart';
+import 'congestion_control.dart';
+import 'speed_calculator.dart';
+import 'extended_proccessor.dart';
 
 const KEEP_ALIVE_MESSAGE = [0, 0, 0, 0];
 const RESERVED = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -73,7 +74,11 @@ typedef BoolHandle = void Function(Peer peer, bool value);
 typedef SingleIntHandle = void Function(Peer peer, int value);
 
 abstract class Peer
-    with PeerEventDispatcher, ExtendedProcessor, CongestionControl {
+    with
+        PeerEventDispatcher,
+        ExtendedProcessor,
+        CongestionControl,
+        SpeedCalculator {
   /// Countdown time , when peer don't receive or send any message from/to remote ,
   /// this class will invoke close.
   /// 单位:秒
@@ -146,32 +151,6 @@ abstract class Peer
   // /// Max request count in one piple ,5
   static const MAX_REQUEST_COUNT = 5;
 
-  int _downloaded = 0;
-
-  int _uploaded = 0;
-
-  int _endTime;
-
-  int _startTime;
-
-  int get livingTime {
-    if (_startTime == null) {
-      return 0;
-    }
-    var passed = DateTime.now().millisecondsSinceEpoch - _startTime;
-    if (_endTime != null) {
-      passed = _endTime - _startTime;
-    }
-    return passed;
-  }
-
-  /// 平均上传速度
-  double get averageUploadSpeed {
-    var lt = livingTime;
-    if (lt == 0) return 0.0;
-    return _uploaded / lt;
-  }
-
   bool remoteEnableFastPeer = false;
 
   bool localEnableFastPeer = true;
@@ -229,12 +208,6 @@ abstract class Peer
   /// 是否已经发送local bitfield给对方
   bool get bitfieldSended => _bitfieldSended;
 
-  /// 从远程下载的总数据量，单位bytes
-  int get downloaded => _downloaded;
-
-  /// 上传到远程的总数据量，单位bytes
-  int get uploaded => _uploaded;
-
   bool get isLeecher => !isSeeder;
 
   /// 如果具备完整的torrent文件，那它就是一个seeder
@@ -291,8 +264,7 @@ abstract class Peer
     try {
       _init();
       var _stream = await connectRemote(timeout);
-      _startTime = DateTime.now().millisecondsSinceEpoch;
-      _endTime = null;
+      startSpeedCalculator();
       _streamChunk = _stream.listen(_processReceiveData, onDone: () {
         _log('Connection is closed $address');
         dispose(BadException('远程关闭了连接'));
@@ -341,14 +313,27 @@ abstract class Peer
   /// - 3 : send time
   /// - 4 : resend times
   bool addRequest(int index, int begin, int length) {
-    var testspeed = currentSpeed;
-    var maxCount = 2 + (testspeed * 500 / DEFAULT_REQUEST_LENGTH).ceil();
+    var maxCount = currentWindow;
     // maxCount = oldCount;
     if (remoteReqq != null) maxCount = min(remoteReqq, maxCount);
     if (_requestBuffer.length >= maxCount) return false;
     _requestBuffer
         .add([index, begin, length, DateTime.now().microsecondsSinceEpoch, 0]);
     return true;
+  }
+
+  int get allowWindow {
+    var maxCount = currentWindow;
+    if (remoteReqq != null) maxCount = min(remoteReqq, maxCount);
+    return maxCount - _requestBuffer.length;
+  }
+
+  bool get isSleeping {
+    return _requestBuffer.isEmpty;
+  }
+
+  bool get isDownloading {
+    return _requestBuffer.isNotEmpty;
   }
 
   void _processReceiveData(dynamic data) {
@@ -381,6 +366,7 @@ abstract class Peer
       var lengthBuffer = Uint8List(4);
       List.copyRange(lengthBuffer, 0, _cacheBuffer, start, 4);
       var length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
+      var piecesMessage = <Uint8List>[];
       while (_cacheBuffer.length - start - 4 >= length) {
         if (length == 0) {
           Timer.run(() => _processMessage(null, null));
@@ -389,12 +375,19 @@ abstract class Peer
           var id = _cacheBuffer[start + 4];
           List.copyRange(
               messageBuffer, 0, _cacheBuffer, start + 5, start + 4 + length);
-          Timer.run(() => _processMessage(id, messageBuffer));
+          if (id == ID_PIECE) {
+            piecesMessage.add(messageBuffer);
+          } else {
+            Timer.run(() => _processMessage(id, messageBuffer));
+          }
         }
         start += (length + 4);
         if (_cacheBuffer.length - start < 4) break;
         List.copyRange(lengthBuffer, 0, _cacheBuffer, start, start + 4);
         length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
+      }
+      if (piecesMessage.isNotEmpty) {
+        Timer.run(() => _processReceivePieces(piecesMessage));
       }
       if (start != 0) _cacheBuffer = _cacheBuffer.sublist(start);
     }
@@ -451,10 +444,10 @@ abstract class Peer
           _log('process request from ${address}');
           _processRemoteRequest(message);
           return; // request message
-        case ID_PIECE:
-          _log('process pices : $address');
-          _processReceivePiece(message);
-          return; // pices message
+        // case ID_PIECE:
+        //   _log('process pices : $address');
+        //   _processReceivePiece(message);
+        //   return; // pices message
         case ID_CANCEL:
           _log('process cancel : $address');
           _processCancel(message);
@@ -670,25 +663,32 @@ abstract class Peer
     fireRequest(index, begin, length);
   }
 
-  void _processReceivePiece(List<int> message) {
-    var dataHead = Uint8List(8);
-    List.copyRange(dataHead, 0, message, 0, 8);
-    var view = ByteData.view(dataHead.buffer);
-    var index = view.getUint32(0);
-    var begin = view.getUint32(4);
-
-    var block = Uint8List(message.length - 8);
-    List.copyRange(block, 0, message, 8);
-    var blockLength = block.length;
-    var request = removeRequest(index, begin, blockLength);
-    // 没有请求的就不处理
-    if (request == null) {
-      return;
-    }
-    ackRequest(request);
-    _downloaded += blockLength;
-    _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
-    firePiece(index, begin, block);
+  /// 处理接收到的PIECE消息
+  ///
+  /// 不同于其他消息处理，PIECE消息是进行批量处理的。
+  void _processReceivePieces(List<Uint8List> messages) {
+    var requests = <List<int>>[];
+    messages.forEach((message) {
+      var dataHead = Uint8List(8);
+      List.copyRange(dataHead, 0, message, 0, 8);
+      var view = ByteData.view(dataHead.buffer);
+      var index = view.getUint32(0);
+      var begin = view.getUint32(4);
+      var blockLength = message.length - 8;
+      var request = removeRequest(index, begin, blockLength);
+      // 没有请求的就不处理
+      if (request == null) {
+        return;
+      }
+      var block = Uint8List(message.length - 8);
+      List.copyRange(block, 0, message, 8);
+      requests.add(request);
+      _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
+      firePiece(index, begin, block);
+    });
+    messages.clear();
+    ackRequest(requests);
+    updateDownload(requests);
     startRequestDataTimeout();
   }
 
@@ -804,7 +804,7 @@ abstract class Peer
     message.add(0);
     var d = <String, dynamic>{};
     d['yourip'] = address.address.rawAddress;
-    d['v'] = 'Dart BT v$VERSION';
+    d['v'] = 'Dart BT v$TORRENT_TASK_VERSION';
     d['m'] = localExtened;
     d['reqq'] = reqq;
     var m = encode(d);
@@ -856,7 +856,7 @@ abstract class Peer
     bytes.addAll(messageHead);
     bytes.addAll(block);
     sendMessage(ID_PIECE, bytes);
-    _uploaded += bytes.length;
+    updateUpload(bytes.length);
     return true;
   }
 
@@ -922,8 +922,6 @@ abstract class Peer
       DateTime.now().microsecondsSinceEpoch,
       resend + 1
     ]);
-    // print('重新发送请求：[${index} - ${begin}]');
-    // _sendRequestMessage(index, begin, length);
   }
 
   /// `bitfield: <len=0001+X><id=5><bitfield>`
@@ -1120,11 +1118,11 @@ abstract class Peer
     _disposed = true;
     _handShaked = false;
     _bitfieldSended = false;
-    _endTime = DateTime.now().millisecondsSinceEpoch;
     fireDisposeEvent(reason);
     clearEventHandles();
     clearExtendedProcessors();
     clearCC();
+    stopSpeedCalculator();
     var re = _streamChunk?.cancel();
     _streamChunk = null;
     _countdownTimer?.cancel();
@@ -1210,6 +1208,11 @@ class _TCPPeer extends Peer {
   }
 }
 
+/// TODO :
+///
+/// Currently , each uTP Peer use a single UTPSocketClient,
+/// actually , one UTPSocketClient should maintain several uTP socket(uTP peer),
+/// this class need to improve.
 class _UTPPeer extends Peer {
   UTPSocketClient _client;
   UTPSocket _socket;

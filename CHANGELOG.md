@@ -26,3 +26,6 @@
 - Add holepunch extension
 - Add LSD extension
 - Fix PEX extension bugs
+
+## 0.2.1
+- Change congestion control
