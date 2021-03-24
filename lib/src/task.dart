@@ -7,7 +7,6 @@ import 'package:torrent_model/torrent_model.dart';
 import 'package:torrent_tracker/torrent_tracker.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
 import 'package:dht_dart/dht_dart.dart';
-import 'package:utp/utp.dart';
 
 import 'file/download_file_manager.dart';
 import 'file/state_file.dart';
@@ -245,13 +244,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
-  void _hookUTP(UTPSocket socket) {
-    log('income utp connect: ${socket.remoteAddress.address}:${socket.remotePort}',
-        name: runtimeType.toString());
-    _peersManager.addNewPeerAddress(
-        CompactAddress(socket.address, socket.port), PeerType.UTP, socket);
-  }
-
   void _hookInPeer(Socket socket) {
     if (socket.remoteAddress == LOCAL_ADDRESS) {
       socket.close();
@@ -287,9 +279,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
-  // TODO test
-  // ServerUTPSocket _utpServer;
-
   @override
   Future start() async {
     // 进入的peer：
@@ -323,8 +312,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     // ignore: unawaited_futures
     _dht.bootstrap();
     if (_fileManager.isAllComplete) {
-      _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
-          event: EVENT_COMPLETED);
+      // ignore: unawaited_futures
+      _tracker.complete();
     } else {
       _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
           event: EVENT_STARTED);
@@ -367,6 +356,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     await _dht?.stop();
     _dht = null;
 
+    _lsd?.close();
+    _lsd = null;
     _peerIds.clear();
     _cominIp.clear();
     return;
@@ -505,18 +496,21 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   // TODO debug:
+  @override
   double get utpDownloadSpeed {
     if (_peersManager == null) return 0.0;
     return _peersManager.utpDownloadSpeed;
   }
 
 // TODO debug:
+  @override
   double get utpUploadSpeed {
     if (_peersManager == null) return 0.0;
     return _peersManager.utpUploadSpeed;
   }
 
 // TODO debug:
+  @override
   int get utpPeerCount {
     if (_peersManager == null) return 0;
     return _peersManager.utpPeerCount;

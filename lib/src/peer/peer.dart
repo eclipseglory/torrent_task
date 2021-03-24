@@ -139,9 +139,6 @@ abstract class Peer
   /// 从通道中获取数据的buffer
   List<int> _cacheBuffer = [];
 
-  // /// 所有事件回调方法Map
-  // final _handleFunctions = <String, Set<Function>>{};
-
   /// 本地发送请求buffer。格式位：[index,begin,length]
   final _requestBuffer = <List<int>>[];
 
@@ -322,12 +319,6 @@ abstract class Peer
     return true;
   }
 
-  int get allowWindow {
-    var maxCount = currentWindow;
-    if (remoteReqq != null) maxCount = min(remoteReqq, maxCount);
-    return maxCount - _requestBuffer.length;
-  }
-
   bool get isSleeping {
     return _requestBuffer.isEmpty;
   }
@@ -366,7 +357,8 @@ abstract class Peer
       var lengthBuffer = Uint8List(4);
       List.copyRange(lengthBuffer, 0, _cacheBuffer, start, 4);
       var length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
-      var piecesMessage = <Uint8List>[];
+      List<Uint8List> piecesMessage;
+      List<Uint8List> haveMessages;
       while (_cacheBuffer.length - start - 4 >= length) {
         if (length == 0) {
           Timer.run(() => _processMessage(null, null));
@@ -375,10 +367,17 @@ abstract class Peer
           var id = _cacheBuffer[start + 4];
           List.copyRange(
               messageBuffer, 0, _cacheBuffer, start + 5, start + 4 + length);
-          if (id == ID_PIECE) {
-            piecesMessage.add(messageBuffer);
-          } else {
-            Timer.run(() => _processMessage(id, messageBuffer));
+          switch (id) {
+            case ID_PIECE:
+              piecesMessage ??= <Uint8List>[];
+              piecesMessage.add(messageBuffer);
+              break;
+            case ID_HAVE:
+              haveMessages ??= <Uint8List>[];
+              haveMessages.add(messageBuffer);
+              break;
+            default:
+              Timer.run(() => _processMessage(id, messageBuffer));
           }
         }
         start += (length + 4);
@@ -386,8 +385,11 @@ abstract class Peer
         List.copyRange(lengthBuffer, 0, _cacheBuffer, start, start + 4);
         length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
       }
-      if (piecesMessage.isNotEmpty) {
+      if (piecesMessage != null && piecesMessage.isNotEmpty) {
         Timer.run(() => _processReceivePieces(piecesMessage));
+      }
+      if (haveMessages != null && haveMessages.isNotEmpty) {
+        Timer.run(() => _processHave(haveMessages));
       }
       if (start != 0) _cacheBuffer = _cacheBuffer.sublist(start);
     }
@@ -431,11 +433,11 @@ abstract class Peer
           _log('remote not interseted me : $address');
           interestedMe = false;
           return; // not interseted message
-        case ID_HAVE:
-          _log('process have from : $address');
-          var index = ByteData.view(message.buffer).getUint32(0);
-          _processHave(index);
-          return; // have message
+        // case ID_HAVE:
+        //   _log('process have from : $address');
+        //   var index = ByteData.view(message.buffer).getUint32(0);
+        //   _processHave(index);
+        //   return; // have message
         case ID_BITFIELD:
           // log('process bitfield from $address');
           initRemoteBitfield(message);
@@ -692,9 +694,14 @@ abstract class Peer
     startRequestDataTimeout();
   }
 
-  void _processHave(int index) {
-    updateRemoteBitfield(index, true);
-    fireHave(index);
+  void _processHave(List<Uint8List> messages) {
+    var indices = <int>[];
+    messages.forEach((message) {
+      var index = ByteData.view(message.buffer).getUint32(0);
+      indices.add(index);
+      updateRemoteBitfield(index, true);
+    });
+    fireHave(indices);
   }
 
   /// 更新远程Bitfield
@@ -719,9 +726,9 @@ abstract class Peer
     fireHandshakeEvent(_remotePeerId, data);
   }
 
-  void _sendExtendedHandshake() {
+  void _sendExtendedHandshake() async {
     if (localEnableExtended && remoteEnableExtended) {
-      var m = _createExtenedHandshakeMessage();
+      var m = await _createExtenedHandshakeMessage();
       sendMessage(ID_EXTENDED, m);
     }
   }
@@ -799,12 +806,14 @@ abstract class Peer
     _handShaked = true;
   }
 
-  List<int> _createExtenedHandshakeMessage() {
+  Future<List<int>> _createExtenedHandshakeMessage() async {
     var message = <int>[];
     message.add(0);
     var d = <String, dynamic>{};
     d['yourip'] = address.address.rawAddress;
-    d['v'] = 'Dart BT v$TORRENT_TASK_VERSION';
+    var version = await getTorrenTaskVersion();
+    version ??= '0.0.0';
+    d['v'] = 'Dart BT v$version';
     d['m'] = localExtened;
     d['reqq'] = reqq;
     var m = encode(d);
@@ -909,7 +918,7 @@ abstract class Peer
   void requestCancel(int index, int begin, int length) {
     var request = removeRequest(index, begin, length);
     if (request != null) {
-      sendCancel(index, begin, length);
+      _sendCancel(index, begin, length);
     }
   }
 
@@ -998,7 +1007,7 @@ abstract class Peer
   ///
   /// The `cancel` message is fixed length, and is used to cancel block requests.
   /// The payload is identical to that of the "request" message. It is typically used during "End Game"
-  void sendCancel(int index, int begin, int length) {
+  void _sendCancel(int index, int begin, int length) {
     var bytes = Uint8List(12);
     var view = ByteData.view(bytes.buffer);
     view.setUint32(0, index, Endian.big);

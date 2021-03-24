@@ -84,22 +84,8 @@ class Piece {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
     _subPiecesQueue.remove(subindex);
     return _writtingSubPieces.add(subindex);
-    // var re = _downloadedSubPieces.add(subindex);
-    // if (isCompleted) {
-    //   clearAvalidatePeer();
-    // }
-    // return re;
   }
 
-  bool subPieceIsWritting(int begin) {
-    var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
-    return _writtingSubPieces.contains(subindex);
-  }
-
-  bool subPieceIsDownloaded(int begin) {
-    var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
-    return _downloadedSubPieces.contains(subindex);
-  }
 
   bool subPieceWriteComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;

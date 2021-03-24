@@ -29,3 +29,6 @@
 
 ## 0.2.1
 - Change congestion control
+
+## 0.3.0
+- Add Send Metadata extension (BEP0009)

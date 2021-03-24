@@ -11,11 +11,17 @@ String generatePeerId([String prefix = ID_PREFIX]) {
   return id;
 }
 
-/// return random int number , `0 - max`
-///
-/// [max] values  between 1 and (1<<32) inclusive.
-int randomInt(int max) {
-  return Random(DateTime.now().millisecond).nextInt(max);
+List<int> hexString2Buffer(String hexStr) {
+  // ignore: prefer_is_empty
+  if (hexStr.isEmpty || hexStr.length.remainder(2) != 0) return null;
+  var size = hexStr.length ~/ 2;
+  var re = <int>[];
+  for (var i = 0; i < size; i++) {
+    var s = hexStr.substring(i * 2, i * 2 + 2);
+    var byte = int.parse(s, radix: 16);
+    re.add(byte);
+  }
+  return re;
 }
 
 /// pow(2, 14)

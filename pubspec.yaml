@@ -1,6 +1,6 @@
 name: torrent_task
 description: BitTorrent download client package written by pure Dart language.
-version: 0.2.1
+version: 0.3.0
 repository: https://github.com/eclipseglory/torrent_task
 issue_tracker : https://github.com/eclipseglory/torrent_task/issues
 publish_to: https://pub.dev/

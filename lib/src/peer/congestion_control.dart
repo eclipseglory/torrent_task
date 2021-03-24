@@ -99,6 +99,7 @@ mixin CongestionControl {
 
       times++;
       _rto *= 2;
+      _allowWindowSize = DEFAULT_REQUEST_LENGTH;
       fireRequestTimeoutEvent(timeoutR);
       startRequestDataTimeout(times);
     });
@@ -118,18 +119,13 @@ mixin CongestionControl {
       updateRTO(rtt);
       downloaded += request[2];
     });
-    if (downloaded == 0) return;
+    if (downloaded == 0 || minRtt == null) return;
     var artt = minRtt;
-    var off_target1 = (CCONTROL_TARGET - artt) / CCONTROL_TARGET;
-    //  The window size in the socket structure specifies the number of bytes we may have in flight (not acked) in total,
-    //  on the connection. The send rate is directly correlated to this window size. The more bytes in flight, the faster
-    //   send rate. In the code, the window size is called max_window. Its size is controlled, roughly, by the following expression:
-    var delay_factor = off_target1;
+    var delay_factor = (CCONTROL_TARGET - artt) / CCONTROL_TARGET;
     var window_factor = downloaded / _allowWindowSize;
     var scaled_gain =
         MAX_CWND_INCREASE_REQUESTS_PER_RTT * delay_factor * window_factor;
-    // Where the first factor scales the off_target to units of target delays.
-    // The scaled_gain is then added to the max_window:
+
     _allowWindowSize += scaled_gain.toInt();
     _allowWindowSize = max(DEFAULT_REQUEST_LENGTH, _allowWindowSize);
     _allowWindowSize = min(MAX_WINDOW, _allowWindowSize);

@@ -446,40 +446,6 @@ class PeersManager with Holepunch, PEX {
     }
     var peer = source as Peer;
 
-    // TODO : 0.2.1 代码：
-    // Piece piece;
-    // if (pieceIndex != -1) {
-    //   piece = _pieceProvider[pieceIndex];
-    // } else {
-    //   piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
-    //       _pieceProvider, peer.remoteSuggestPieces);
-    // }
-    // if (piece == null) return;
-
-    // var flag = true;
-    // for (var i = 0; i < 5; i++) {
-    //   var subIndex = piece.popSubPiece();
-    //   if (subIndex == null) {
-    //     flag = false;
-    //     break;
-    //   }
-    //   var size = DEFAULT_REQUEST_LENGTH; // block大小现算
-    //   var begin = subIndex * size;
-    //   if ((begin + size) > piece.byteLength) {
-    //     size = piece.byteLength - begin;
-    //   }
-    //   // print('${peer.id} : ${peer.allowWindow}');
-    //   if (!peer.sendRequest(piece.index, begin, size)) {
-    //     piece.pushSubPiece(subIndex);
-    //     flag = false;
-    //     break;
-    //   } else {
-    //     _requestPieces(peer); // 疯狂请求资源
-    //   }
-    // }
-    // if (flag) _requestPieces(peer);
-
-    // TODO : 0.2.0 代码：
     Piece piece;
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
@@ -499,12 +465,10 @@ class PeersManager with Holepunch, PEX {
     if ((begin + size) > piece.byteLength) {
       size = piece.byteLength - begin;
     }
-    // print('${peer.id} : ${peer.allowWindow}');
     if (!peer.sendRequest(piece.index, begin, size)) {
       piece.pushSubPiece(subIndex);
     } else {
       Timer.run(() => _requestPieces(peer, pieceIndex));
-      // _requestPieces(peer, pieceIndex); // 疯狂请求资源
     }
   }
 
@@ -570,18 +534,22 @@ class PeersManager with Holepunch, PEX {
     peer.sendInterested(false);
   }
 
-  void _processHaveUpdate(dynamic source, int index) {
+  void _processHaveUpdate(dynamic source, List<int> indices) {
     var peer = source as Peer;
-    if (_pieceProvider[index] == null) return;
+    var flag = false;
+    indices.forEach((index) {
+      if (_pieceProvider[index] == null) return;
 
-    if (!_fileManager.localHave(index)) {
-      if (peer.chokeMe) {
-        peer.sendInterested(true);
-      } else {
-        _pieceProvider[index]?.addAvalidatePeer(peer.id);
-        if (peer.isSleeping) Timer.run(() => _requestPieces(peer));
+      if (!_fileManager.localHave(index)) {
+        if (peer.chokeMe) {
+          peer.sendInterested(true);
+        } else {
+          flag = true;
+          _pieceProvider[index]?.addAvalidatePeer(peer.id);
+        }
       }
-    }
+    });
+    if (flag && peer.isSleeping) Timer.run(() => _requestPieces(peer));
   }
 
   void _processChokeChange(dynamic source, bool choke) {
@@ -617,27 +585,18 @@ class PeersManager with Holepunch, PEX {
     requests.forEach((element) {
       if (element[4] >= 3) {
         flag = true;
-        print(
-            'Cancel and re-request it by others :  ${element[0]} - ${element[1]}');
-        peer.requestCancel(element[0], element[1], element[2]);
+        Timer.run(() => peer.requestCancel(element[0], element[1], element[2]));
         var index = element[0];
         var begin = element[1];
         var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
         var piece = _pieceManager[index];
-        if (piece != null) {
-          var subPieceCompleted = piece.subPieceIsDownloaded(begin) ||
-              piece.subPieceIsWritting(begin);
-          if (!subPieceCompleted) {
-            piece?.pushSubPiece(subindex);
-            return;
-          }
-        }
+        piece?.pushSubPiece(subindex);
       }
     });
     // 唤醒其他可能没有工作的peer
     if (flag) {
       _activePeers.forEach((p) {
-        if (p != peer && p.currentRequestBuffer.isEmpty) {
+        if (p != peer && p.isSleeping) {
           Timer.run(() => _requestPieces(p));
         }
       });
@@ -800,6 +759,6 @@ class PeersManager with Holepunch, PEX {
   @override
   void holePunchRendezvous(CompactAddress ip) {
     // TODO: implement holePunchRendezvous
-    print('收到 holePunch Rendezvous');
+    // print('收到 holePunch Rendezvous');
   }
 }

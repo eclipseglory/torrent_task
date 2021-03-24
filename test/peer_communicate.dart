@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -77,17 +78,19 @@ void main() async {
     });
     peer.onCancel((peer, index, begin, length) {
       callMap['cancel'] = true;
-      assert(index == 2);
+      assert(index == 1);
       assert(begin == 0);
       assert(length == DEFAULT_REQUEST_LENGTH);
+      print('receive client cancel');
     });
     peer.onPortChange((peer, port) {
       callMap['port'] = true;
       assert(port == 3321);
+      print('receive client onPortChange');
     });
     peer.onHave((peer, index) {
       callMap['have'] = true;
-      assert(index == 2);
+      assert(index[0] == 2);
       print('receive client have');
     });
     peer.onKeepalive((peer) {
@@ -105,12 +108,14 @@ void main() async {
       assert(index == 3);
       callMap['suggest_piece'] = true;
       peer.sendRequest(index, 0);
+      print('receive client suggest');
     });
 
     peer.onAllowFast((peer, index) {
       assert(index == 4);
       callMap['allow_fast'] = true;
-      peer.sendRequest(index, 0);
+      Timer.run(() => peer.sendRequest(index, 0));
+      print('receive client allow fast');
     });
     peer.onPiece((p, index, begin, block) async {
       callMap['piece'] = true;
@@ -158,8 +163,8 @@ void main() async {
   peer.onChokeChange((peer, choke) {
     if (!choke) {
       peer.sendRequest(1, 0);
-      peer.sendRequest(2, 0);
-      peer.sendCancel(2, 0, DEFAULT_REQUEST_LENGTH);
+      peer.requestCancel(1, 0, DEFAULT_REQUEST_LENGTH);
+      peer.sendRequest(1, 0);
       peer.sendHave(2);
       peer.sendKeeplive();
       peer.sendPortChange(3321);

@@ -106,7 +106,7 @@ mixin PeerEventDispatcher {
     });
   }
 
-  void fireHave(dynamic index) {
+  void fireHave(List<int> index) {
     var fSet = _handleFunctions[PEER_EVENT_HAVE];
     fSet?.forEach((f) {
       Timer.run(() => f(this, index));
@@ -233,13 +233,15 @@ mixin PeerEventDispatcher {
   }
 
   /// Add `remote have`  event handler
-  bool onHave(SingleIntHandle handle) {
-    return _onSingleIntCallback(handle, PEER_EVENT_HAVE);
+  bool onHave(void Function(dynamic source, List<int> indices) handle) {
+    var list = _getFunctionSet(PEER_EVENT_HAVE);
+    return list.add(handle);
   }
 
   /// Remove `remote have`  event handler
-  bool offHave(SingleIntHandle handle) {
-    return _offSingleIntCallback(handle, PEER_EVENT_HAVE);
+  bool offHave(void Function(dynamic source, List<int> indices) handle) {
+    var list = _getFunctionSet(PEER_EVENT_HAVE);
+    return list.remove(handle);
   }
 
   /// Add `receive remote piece`  event handler
