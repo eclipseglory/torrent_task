@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:developer';
+import 'dart:io';
 
 import 'package:torrent_model/torrent_model.dart';
 import '../peer/peer_base.dart';
@@ -47,8 +48,8 @@ class DownloadFileManager {
 
   Future<DownloadFileManager> _init(String directory) async {
     var lastc = directory.substring(directory.length - 1);
-    if (lastc != '\\' || lastc != '/') {
-      directory = directory + '\\';
+    if (lastc != Platform.pathSeparator) {
+      directory = directory + Platform.pathSeparator;
     }
     _initFileMap(directory);
     return this;

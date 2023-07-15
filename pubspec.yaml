@@ -2,27 +2,28 @@ name: torrent_task
 description: BitTorrent download client package written by pure Dart language.
 version: 0.3.0
 repository: https://github.com/eclipseglory/torrent_task
-issue_tracker : https://github.com/eclipseglory/torrent_task/issues
+issue_tracker: https://github.com/eclipseglory/torrent_task/issues
 publish_to: https://pub.dev/
 
 environment:
-  sdk: '>=2.10.0 <3.0.0'
+  sdk: ">=2.10.0 <3.0.0"
 
 dependencies:
-#  path: ^1.7.0
-  torrent_model : '>=1.0.3 <2.0.0'
-  torrent_tracker: '>=1.3.12 <2.0.0'
-  
-  # torrent_tracker: 
+  #  path: ^1.7.0
+  torrent_model: ">=1.0.3 <2.0.0"
+  torrent_tracker: ">=1.3.12 <2.0.0"
+
+  # torrent_tracker:
   #   path: '../../dd/torrent_tracker'
 
-  dht_dart: '>=0.0.7 <1.0.0'
-  dartorrent_common: '>=1.0.3 <2.0.0'
-  bencode_dart : ^1.0.2
-  utp: '>= 1.0.1 < 2.0.0'
+  dht_dart: ">=0.0.7 <1.0.0"
+  dartorrent_common: ">=1.0.3 <2.0.0"
+  bencode_dart: ^1.0.2
+  utp: ">=1.0.1 <2.0.0"
   # utp:
   #   path: '../../dd/utp'
 
 dev_dependencies:
   pedantic: ^1.9.0
   test: ^1.14.4
+  meta: 1.2.4

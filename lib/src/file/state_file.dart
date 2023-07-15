@@ -56,8 +56,8 @@ class StateFile {
 
   Future<File> init(String directoryPath, Torrent metainfo) async {
     var lastc = directoryPath.substring(directoryPath.length - 1);
-    if (lastc != '\\' || lastc != '/') {
-      directoryPath = directoryPath + '\\\\';
+    if (lastc != Platform.pathSeparator) {
+      directoryPath = directoryPath + Platform.pathSeparator;
     }
 
     _bitfieldFile = File('${directoryPath}${metainfo.infoHash}.bt.state');

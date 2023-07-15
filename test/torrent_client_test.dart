@@ -161,11 +161,12 @@ void main() {
 
   group('StateFile Test - ', () {
     var directory = 'test';
-    // var torrent = await Torrent.parse('$directory/sample3.torrent');
     Torrent torrent;
     setUpAll(() async {
-      torrent = await Torrent.parse('$directory/test4.torrent');
-      var f = File('$directory/${torrent.infoHash}.bt.state');
+      torrent = await Torrent.parse(
+          '$directory${Platform.pathSeparator}test4.torrent');
+      var f = File(
+          '$directory${Platform.pathSeparator}${torrent.infoHash}.bt.state');
       if (await f.exists()) await f.delete();
     });
     test('Write/Read StateFile', () async {
@@ -204,7 +205,8 @@ void main() {
 
       await stateFile.close();
       await stateFile.close(); //关闭两次会怎样？
-      var f = File('$directory/${torrent.infoHash}.bt.state');
+      var f = File(
+          '$directory${Platform.pathSeparator}${torrent.infoHash}.bt.state');
       var locker = Completer();
       var data = <int>[];
       f.openRead().listen((event) {
@@ -240,7 +242,8 @@ void main() {
 
     test('Delete StateFile', () async {
       var stateFile = await StateFile.getStateFile(directory, torrent);
-      var t = File('$directory/${torrent.infoHash}.bt.state');
+      var t = File(
+          '$directory${Platform.pathSeparator}${torrent.infoHash}.bt.state');
       assert(await t.exists());
       await stateFile.delete();
       await stateFile.delete(); //删除两次
