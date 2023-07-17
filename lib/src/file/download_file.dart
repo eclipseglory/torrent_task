@@ -159,7 +159,7 @@ class DownloadFile {
 
   Future<RandomAccessFile> getRandomAccessFile(String type) async {
     var file = await _getOrCreateFile();
-    var access;
+    RandomAccessFile? access;
     if (type == WRITE) {
       _writeAcces ??= await file?.open(mode: FileMode.writeOnlyAppend);
       access = _writeAcces;
@@ -171,7 +171,7 @@ class DownloadFile {
       _sc = StreamController();
       _ss = _sc?.stream.listen(_processRequest);
     }
-    return access;
+    return access!;
   }
 
   Future close() async {
@@ -214,9 +214,9 @@ class DownloadFile {
   }
 
   @override
-  bool operator ==(n) {
-    if (n is DownloadFile) {
-      return n.filePath == filePath;
+  bool operator ==(other) {
+    if (other is DownloadFile) {
+      return other.filePath == filePath;
     }
     return false;
   }

@@ -63,21 +63,21 @@ class DownloadFileManager {
 
   bool get isAllComplete {
     return _stateFile.bitfield.piecesNum ==
-        _stateFile.bitfield.completedPieces?.length;
+        _stateFile.bitfield.completedPieces.length;
   }
 
   int get piecesNumber => _stateFile.bitfield.piecesNum;
 
   void _subPieceWriteComplete(int pieceIndex, int begin, int length) {
-    _subPieceCompleteHandles.forEach((handle) {
+    for (var handle in _subPieceCompleteHandles) {
       Timer.run(() => handle(pieceIndex, begin, length));
-    });
+    }
   }
 
   void _subPieceWriteFailed(int pieceIndex, int begin, int length) {
-    _subPieceFailedHandles.forEach((handle) {
+    for (var handle in _subPieceFailedHandles) {
       Timer.run(() => handle(pieceIndex, begin, length));
-    });
+    }
   }
 
   Future<bool> updateBitfield(int index, [bool have = true]) {
@@ -93,9 +93,9 @@ class DownloadFileManager {
   }
 
   void _subPieceReadComplete(int pieceIndex, int begin, List<int> block) {
-    _subPieceReadHandles.forEach((h) {
+    for (var h in _subPieceReadHandles) {
       Timer.run(() => h(pieceIndex, begin, block));
-    });
+    }
   }
 
   int get downloaded => _stateFile.downloaded;
@@ -140,9 +140,9 @@ class DownloadFileManager {
   }
 
   void _fireFileComplete(String path) {
-    _fileCompleteHandles.forEach((element) {
+    for (var element in _fileCompleteHandles) {
       Timer.run(() => element(path));
-    });
+    }
   }
 
   void _initFileMap(String directory) {
@@ -165,8 +165,7 @@ class DownloadFileManager {
         if (l == null) {
           l = <DownloadFile>[];
           _piece2fileMap?[pieceIndex] = l;
-          var local_have = localHave(pieceIndex);
-          if (local_have != null && !local_have) pieces.add(pieceIndex);
+          if (localHave(pieceIndex)) pieces.add(pieceIndex);
         }
         l.add(df);
       }

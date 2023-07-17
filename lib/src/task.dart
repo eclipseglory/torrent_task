@@ -223,10 +223,10 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   void _processTrackerPeerEvent(Tracker source, PeerEvent? event) {
     if (event == null) return;
     var ps = event.peers;
-    if (ps != null && ps.isNotEmpty) {
-      ps.forEach((url) {
+    if (ps.isNotEmpty) {
+      for (var url in ps) {
         _processNewPeerFound(url);
-      });
+      }
     }
   }
 
@@ -326,9 +326,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     await _tracker?.stop(force);
     Set<Function>? tempHandler = Set<Function>.from(_stopHandlers);
     await dispose();
-    tempHandler.forEach((element) {
+    for (var element in tempHandler) {
       Timer.run(() => element());
-    });
+    }
     tempHandler.clear();
     tempHandler = null;
   }
@@ -383,9 +383,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   void _fireFileComplete(String filepath) {
-    _fileCompleteHandlers.forEach((handler) {
+    for (var handler in _fileCompleteHandlers) {
       Timer.run(() => handler(filepath));
-    });
+    }
   }
 
   @override
@@ -434,9 +434,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   void _fireTaskComplete() {
-    _taskCompleteHandlers.forEach((element) {
+    for (var element in _taskCompleteHandlers) {
       Timer.run(() => element());
-    });
+    }
   }
 
   @override
@@ -446,21 +446,20 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   double get progress {
     var d = downloaded;
     if (d == null) return 0.0;
-    var l = _metaInfo?.length;
-    if (l == null) return 0.0;
+    var l = _metaInfo.length;
     return d / l;
   }
 
   void _fireTaskPaused() {
-    _pauseHandlers.forEach((element) {
+    for (var element in _pauseHandlers) {
       Timer.run(() => element());
-    });
+    }
   }
 
   void _fireTaskResume() {
-    _resumeHandlers.forEach((element) {
+    for (var element in _resumeHandlers) {
       Timer.run(() => element());
-    });
+    }
   }
 
   @override
@@ -523,7 +522,6 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   @override
   void requestPeersFromDHT() {
-    if (_metaInfo == null) return;
     _dht?.requestPeers(String.fromCharCodes(_metaInfo.infoHashBuffer));
   }
 }

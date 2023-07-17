@@ -167,9 +167,9 @@ class Piece {
   int get hashCode => hashString.hashCode;
 
   @override
-  bool operator ==(b) {
-    if (b is Piece) {
-      return b.hashString == hashString;
+  bool operator ==(other) {
+    if (other is Piece) {
+      return other.hashString == hashString;
     }
     return false;
   }

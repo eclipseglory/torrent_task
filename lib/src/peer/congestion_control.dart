@@ -61,10 +61,10 @@ mixin CongestionControl {
   }
 
   void fireRequestTimeoutEvent(List<List<int>> requests) {
-    if (requests == null || requests.isEmpty) return;
-    _handles.forEach((f) {
+    if (requests.isEmpty) return;
+    for (var f in _handles) {
       Timer.run(() => f(this, requests));
-    });
+    }
   }
 
   List<List<int>> get currentRequestBuffer;
@@ -76,7 +76,7 @@ mixin CongestionControl {
   void startRequestDataTimeout([int times = 0]) {
     _timeout?.cancel();
     var requests = currentRequestBuffer;
-    if (requests == null || requests.isEmpty) return;
+    if (requests.isEmpty) return;
     _timeout = Timer(Duration(microseconds: _rto.toInt()), () {
       if (requests.isEmpty) return;
       if (times + 1 >= 5) {
@@ -93,9 +93,9 @@ mixin CongestionControl {
         if (requests.isEmpty) break;
         first = requests.first;
       }
-      timeoutR.forEach((request) {
+      for (var request in timeoutR) {
         orderResendRequest(request[0], request[1], request[2], request[4]);
-      });
+      }
 
       times++;
       _rto *= 2;
@@ -109,24 +109,24 @@ mixin CongestionControl {
     if (requests.isEmpty) return;
     var downloaded = 0;
     int? minRtt;
-    requests.forEach((request) {
+    for (var request in requests) {
       // 重发后收到的不管
-      if (request == null || request[4] != 0) return;
+      if (request[4] != 0) continue;
       var now = DateTime.now().microsecondsSinceEpoch;
       var rtt = now - request[3];
       minRtt ??= rtt;
-      minRtt = min(minRtt!, rtt);
+      minRtt = min(minRtt, rtt);
       updateRTO(rtt);
       downloaded += request[2];
-    });
+    }
     if (downloaded == 0 || minRtt == null) return;
     var artt = minRtt;
-    var delay_factor = (CCONTROL_TARGET - artt!) / CCONTROL_TARGET;
-    var window_factor = downloaded / _allowWindowSize;
-    var scaled_gain =
-        MAX_CWND_INCREASE_REQUESTS_PER_RTT * delay_factor * window_factor;
+    var delayFactor = (CCONTROL_TARGET - artt) / CCONTROL_TARGET;
+    var windowFactor = downloaded / _allowWindowSize;
+    var scaledGain =
+        MAX_CWND_INCREASE_REQUESTS_PER_RTT * delayFactor * windowFactor;
 
-    _allowWindowSize += scaled_gain.toInt();
+    _allowWindowSize += scaledGain.toInt();
     _allowWindowSize = max(DEFAULT_REQUEST_LENGTH, _allowWindowSize);
     _allowWindowSize = min(MAX_WINDOW, _allowWindowSize);
   }

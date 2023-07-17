@@ -98,9 +98,9 @@ class Bitfield {
       var str = element.toRadixString(2);
       var l = str.length;
       for (var i = 0; i < 8 - l; i++) {
-        str = '0' + str;
+        str = '0$str';
       }
-      return previousValue + str + '-';
+      return '$previousValue$str-';
     });
   }
 

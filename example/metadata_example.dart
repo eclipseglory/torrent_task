@@ -18,7 +18,7 @@ void main(List<String> args) async {
   metadata.onDownloadComplete((data) {
     var msg = decode(Uint8List.fromList(data));
     print('complete , info : $msg');
-    tracker?.stop(true);
+    tracker.stop(true);
   });
 
   var u8List = Uint8List.fromList(metadata.infoHashBuffer);
@@ -26,14 +26,14 @@ void main(List<String> args) async {
   tracker.onPeerEvent((source, event) {
     if (event == null) return;
     var peers = event.peers;
-    peers.forEach((element) {
+    for (var element in peers) {
       metadata.addNewPeerAddress(element);
-    });
+    }
   });
   // ignore: unawaited_futures
   findPublicTrackers().listen((alist) {
-    alist.forEach((element) {
+    for (var element in alist) {
       tracker.runTracker(element, u8List);
-    });
+    }
   });
 }

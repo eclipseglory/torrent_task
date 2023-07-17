@@ -22,9 +22,9 @@ void main() {
       if (c * 8 != pieces) c++;
       print('check buffer length');
       assert(bitfield!.buffer.length == c);
-      bitfield!.buffer.forEach((element) {
+      for (var element in bitfield!.buffer) {
         assert(element == 0);
-      });
+      }
     });
 
     test('random set/get test, and check the complete index ', () {
@@ -55,18 +55,18 @@ void main() {
 
       assert(bitfield!.haveCompletePiece());
       print('Check bitfield value...');
-      list.forEach((index) {
+      for (var index in list) {
         assert(bitfield!.getBit(index));
-      });
+      }
       var tempList = [];
       tempList.addAll(list);
-      tempList.forEach((index) {
+      for (var index in tempList) {
         bitfield!.setBit(index, false);
-      });
+      }
       print('Clean all bitfield...');
-      bitfield!.buffer.forEach((element) {
+      for (var element in bitfield!.buffer) {
         assert(element == 0);
-      });
+      }
     });
 
     test('add/remote complete list', () {
@@ -135,7 +135,7 @@ void main() {
       bitfieldList =
           List.generate(10, (index) => Bitfield.createEmptyBitfield(pieces));
 
-      bitfieldList.forEach((bitfield) {
+      for (var bitfield in bitfieldList) {
         var t = Random();
         var randomIndex = <int>{};
         for (var i = 0; i < pieces; i++) {
@@ -151,11 +151,13 @@ void main() {
             assert(bitfield.getBit(index) == true);
           }
         }
-      });
+      }
     });
 
     test('ramdon pieces', () {
-      bitfieldList.forEach((element) => print(element.toString()));
+      for (var element in bitfieldList) {
+        print(element.toString());
+      }
     });
   });
 

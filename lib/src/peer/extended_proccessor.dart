@@ -55,20 +55,18 @@ mixin ExtendedProcessor {
   }
 
   void _fireExtendedEvent(String name, dynamic data) {
-    _eventHandler.forEach((element) {
+    for (var element in _eventHandler) {
       Timer.run(() => element(this, name, data));
-    });
+    }
   }
 
   void processExtendHandshake(dynamic data) {
     var m = data['m'] as Map;
     _rawMap = m;
-    if (m != null) {
-      m.forEach((key, value) {
-        if (value == 0) return;
-        _extendedEventMap[value] = key;
-      });
-    }
+    m.forEach((key, value) {
+      if (value == 0) return;
+      _extendedEventMap[value] = key;
+    });
     _fireExtendedEvent('handshake', data);
   }
 

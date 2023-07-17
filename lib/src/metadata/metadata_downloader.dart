@@ -52,7 +52,7 @@ class MetadataDownloader
 
   bool _running = false;
 
-  final int _E = 'e'.codeUnits[0];
+  final int E = 'e'.codeUnits[0];
 
   List<int> _infoDatas = [];
 
@@ -82,10 +82,10 @@ class MetadataDownloader
     _running = false;
     await _dht.stop();
     var fs = <Future>[];
-    _activePeers.forEach((peer) {
+    for (var peer in _activePeers) {
       unHookPeer(peer);
       fs.add(peer.dispose());
-    });
+    }
     _activePeers.clear();
     _avalidatedPeers.clear();
     _peersAddress.clear();
@@ -121,7 +121,6 @@ class MetadataDownloader
   void addNewPeerAddress(CompactAddress address,
       [PeerType type = PeerType.TCP, dynamic socket]) {
     if (!_running) return;
-    if (address == null) return;
     if (address.address == localExtenelIP) return;
     if (socket != null) {
       // 说明是主动连接的peer,目前只允许一个ip连一次
@@ -166,7 +165,6 @@ class MetadataDownloader
   }
 
   void unHookPeer(Peer peer) {
-    if (peer == null) return;
     peer.offDispose(_processPeerDispose);
     peer.offHandShake(_processPeerHandshake);
     peer.offConnect(_peerConnected);
@@ -239,11 +237,11 @@ class MetadataDownloader
   }
 
   void parseMetaDataMessage(Peer peer, Uint8List data) {
-    var index;
+    int? index;
     var remotePeerId = peer.remotePeerId;
     try {
       for (var i = 0; i < data.length; i++) {
-        if (data[i] == _E && data[i + 1] == _E) {
+        if (data[i] == E && data[i + 1] == E) {
           index = i + 1;
           break;
         }
@@ -286,11 +284,11 @@ class MetadataDownloader
     if (_completedPieces.length >= _metaDataBlockNum!) {
       // 此时就停止，然后抛出事件
       await stop();
-      _handlers.forEach((h) {
+      for (var h in _handlers) {
         Timer.run(() {
           h(_infoDatas);
         });
-      });
+      }
       return;
     }
   }

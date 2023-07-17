@@ -111,9 +111,9 @@ class PieceManager implements PieceProvider {
     _donwloadingPieces.remove(index);
     if (piece != null) {
       piece.dispose();
-      _pieceCompleteHandles.forEach((handle) {
+      for (var handle in _pieceCompleteHandles) {
         Timer.run(() => handle(index));
-      });
+      }
     }
   }
 

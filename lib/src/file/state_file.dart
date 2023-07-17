@@ -45,14 +45,11 @@ class StateFile {
   Bitfield get bitfield => _bitfield;
 
   int get downloaded {
-    if (bitfield != null && bitfield.completedPieces != null) {
-      var _downloaded = bitfield.completedPieces!.length * metainfo.pieceLength;
-      if (bitfield.completedPieces!.contains(bitfield.piecesNum - 1)) {
-        _downloaded -= metainfo.pieceLength - metainfo.lastPieceLength;
-      }
-      return _downloaded;
+    var downloaded = bitfield.completedPieces.length * metainfo.pieceLength;
+    if (bitfield.completedPieces.contains(bitfield.piecesNum - 1)) {
+      downloaded -= metainfo.pieceLength - metainfo.lastPieceLength;
     }
-    return 0;
+    return downloaded;
   }
 
   int get uploaded => _uploaded;
@@ -63,7 +60,7 @@ class StateFile {
       directoryPath = directoryPath + Platform.pathSeparator;
     }
 
-    _bitfieldFile = File('${directoryPath}${metainfo.infoHash}.bt.state');
+    _bitfieldFile = File('$directoryPath${metainfo.infoHash}.bt.state');
     var exists = await _bitfieldFile?.exists();
     if (exists != null && !exists) {
       _bitfieldFile = await _bitfieldFile?.create(recursive: true);

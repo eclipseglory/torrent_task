@@ -9,8 +9,6 @@ import 'package:dartorrent_common/dartorrent_common.dart';
 import 'package:torrent_task/torrent_task.dart';
 import 'package:utp/utp.dart';
 
-import '../utils.dart';
-import 'bitfield.dart';
 import 'peer_event_dispatcher.dart';
 import 'congestion_control.dart';
 import 'speed_calculator.dart';
@@ -253,16 +251,16 @@ abstract class Peer
   /// 远程所有的已完成Piece
   List<int> get remoteCompletePieces {
     if (_remoteBitfield == null) return [];
-    return _remoteBitfield!.completedPieces ?? [];
+    return _remoteBitfield!.completedPieces;
   }
 
   /// Connect remote peer
   Future connect([int timeout = DEFAULT_CONNECT_TIMEOUT]) async {
     try {
       _init();
-      var _stream = await connectRemote(timeout);
+      var stream = await connectRemote(timeout);
       startSpeedCalculator();
-      _streamChunk = _stream?.listen(_processReceiveData, onDone: () {
+      _streamChunk = stream?.listen(_processReceiveData, onDone: () {
         _log('Connection is closed $address');
         dispose(BadException('远程关闭了连接'));
       }, onError: (e) {
@@ -443,7 +441,7 @@ abstract class Peer
           if (message != null) initRemoteBitfield(message);
           return; // bitfield message
         case ID_REQUEST:
-          _log('process request from ${address}');
+          _log('process request from $address');
           if (message != null) _processRemoteRequest(message);
           return; // request message
         // case ID_PIECE:
@@ -490,7 +488,7 @@ abstract class Peer
           return;
       }
     }
-    _log('Cannot process the message', 'Unknown message : ${message}');
+    _log('Cannot process the message', 'Unknown message : $message');
   }
 
   /// 从requestbuffer中将request删除
@@ -537,7 +535,7 @@ abstract class Peer
     var index = view.getUint32(0);
     var begin = view.getUint32(4);
     var length = view.getUint32(8);
-    var requestIndex;
+    int? requestIndex;
     for (var i = 0; i < _remoteRequestBuffer.length; i++) {
       var r = _remoteRequestBuffer[i];
       if (r[0] == index && r[1] == begin) {
@@ -637,9 +635,9 @@ abstract class Peer
   void _processRemoteRequest(Uint8List message) {
     if (_remoteRequestBuffer.length > reqq) {
       dev.log('Request Error:',
-          error: 'Too many requests from ${address}',
+          error: 'Too many requests from $address',
           name: runtimeType.toString());
-      dispose(BadException('Too many requests from ${address}'));
+      dispose(BadException('Too many requests from $address'));
       return;
     }
     var view = ByteData.view(message.buffer);
@@ -650,7 +648,7 @@ abstract class Peer
       dev.log('TOO LARGEt BLOCK',
           error: 'BLOCK $length', name: runtimeType.toString());
       dispose(BadException(
-          '${address} : request block length larger than limit : $length > $MAX_REQUEST_LENGTH'));
+          '$address : request block length larger than limit : $length > $MAX_REQUEST_LENGTH'));
       return;
     }
     if (chokeRemote) {
@@ -675,7 +673,7 @@ abstract class Peer
   /// 不同于其他消息处理，PIECE消息是进行批量处理的。
   void _processReceivePieces(List<Uint8List> messages) {
     var requests = <List<int>>[];
-    messages.forEach((message) {
+    for (var message in messages) {
       var dataHead = Uint8List(8);
       List.copyRange(dataHead, 0, message, 0, 8);
       var view = ByteData.view(dataHead.buffer);
@@ -685,14 +683,14 @@ abstract class Peer
       var request = removeRequest(index, begin, blockLength);
       // 没有请求的就不处理
       if (request == null) {
-        return;
+        continue;
       }
       var block = Uint8List(message.length - 8);
       List.copyRange(block, 0, message, 8);
       requests.add(request);
       _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
       firePiece(index, begin, block);
-    });
+    }
     messages.clear();
     ackRequest(requests);
     updateDownload(requests);
@@ -701,11 +699,11 @@ abstract class Peer
 
   void _processHave(List<Uint8List> messages) {
     var indices = <int>[];
-    messages.forEach((message) {
+    for (var message in messages) {
       var index = ByteData.view(message.buffer).getUint32(0);
       indices.add(index);
       updateRemoteBitfield(index, true);
-    });
+    }
     fireHave(indices);
   }
 
@@ -973,7 +971,7 @@ abstract class Peer
   /// index of a piece that has just been successfully downloaded and verified via the hash.
   void sendHave(int index) {
     var bytes = Uint8List(4);
-    _log('发送have信息给对方 : ${bytes},$index');
+    _log('发送have信息给对方 : $bytes,$index');
     ByteData.view(bytes.buffer).setUint32(0, index, Endian.big);
     sendMessage(ID_HAVE, bytes);
   }
@@ -1118,7 +1116,7 @@ abstract class Peer
   void _startToCountdown() {
     _countdownTimer?.cancel();
     _countdownTimer = Timer(Duration(seconds: countdownTime), () {
-      dispose('Over ${countdownTime} seconds no communication, close');
+      dispose('Over $countdownTime seconds no communication, close');
     });
   }
 

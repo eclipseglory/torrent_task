@@ -68,12 +68,12 @@ mixin SpeedCalculator {
 
   /// 更新下载
   void updateDownload(List<List<int>> requests) {
-    if (requests == null || requests.isEmpty) return;
+    if (requests.isEmpty) return;
     var downloaded = 0;
-    requests.forEach((request) {
-      if (request[4] != 0) return; // 重新计时的不算
+    for (var request in requests) {
+      if (request[4] != 0) continue; // 重新计时的不算
       downloaded += request[2];
-    });
+    }
     _downloadedHistory.add([downloaded, DateTime.now().microsecondsSinceEpoch]);
     _downloaded += downloaded;
   }

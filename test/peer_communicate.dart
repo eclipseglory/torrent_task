@@ -49,7 +49,7 @@ void main() async {
     });
     peer.onHandShake((peer, remotePeerId, data) {
       callMap['handshake1'] = true;
-      print('receive ${remotePeerId} handshake');
+      print('receive $remotePeerId handshake');
       peer.sendInterested(true);
       print('send interested to $remotePeerId');
     });
@@ -152,7 +152,7 @@ void main() async {
   });
   peer.onHandShake((peer, remotePeerId, data) {
     callMap['handshake2'] = true;
-    print('receive ${remotePeerId} handshake');
+    print('receive $remotePeerId handshake');
     peer.sendBitfield(bitfield);
     print('send bitfield to server');
     peer.sendInterested(true);
