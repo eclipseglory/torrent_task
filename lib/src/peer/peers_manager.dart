@@ -25,8 +25,8 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 /// - 没有处理对外的Suggest Piece/Fast Allow
 class PeersManager with Holepunch, PEX {
   final List<InternetAddress> IGNORE_IPS = [
-    InternetAddress.tryParse('0.0.0.0'),
-    InternetAddress.tryParse('127.0.0.1')
+    InternetAddress.tryParse('0.0.0.0')!,
+    InternetAddress.tryParse('127.0.0.1')!
   ];
 
   bool _disposed = false;
@@ -39,7 +39,7 @@ class PeersManager with Holepunch, PEX {
 
   final Set<InternetAddress> _incomingAddress = {};
 
-  InternetAddress localExtenelIP;
+  InternetAddress? localExtenelIP;
 
   /// 写入磁盘的缓存最大值
   int maxWriteBufferSize;
@@ -56,9 +56,9 @@ class PeersManager with Holepunch, PEX {
 
   int _downloaded = 0;
 
-  int _startedTime;
+  int? _startedTime;
 
-  int _endTime;
+  int? _endTime;
 
   int _uploadedNotifySize = 0;
 
@@ -72,7 +72,7 @@ class PeersManager with Holepunch, PEX {
 
   bool _paused = false;
 
-  Timer _keepAliveTimer;
+  Timer? _keepAliveTimer;
 
   final List _pausedRequest = [];
 
@@ -83,9 +83,6 @@ class PeersManager with Holepunch, PEX {
   PeersManager(this._localPeerId, this._pieceManager, this._pieceProvider,
       this._fileManager, this._metaInfo,
       [this.maxWriteBufferSize = MAX_WRITE_BUFFER_SIZE]) {
-    assert(_pieceManager != null &&
-        _pieceProvider != null &&
-        _fileManager != null);
     // hook FileManager and PieceManager
     _fileManager.onSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.onSubPieceReadComplete(readSubPieceComplete);
@@ -128,9 +125,9 @@ class PeersManager with Holepunch, PEX {
   /// the end time is when manager was disposed.
   int get liveTime {
     if (_startedTime == null) return 0;
-    var passed = DateTime.now().millisecondsSinceEpoch - _startedTime;
+    var passed = DateTime.now().millisecondsSinceEpoch - _startedTime!;
     if (_endTime != null) {
-      passed = _endTime - _startedTime;
+      passed = _endTime! - _startedTime!;
     }
     return passed;
   }
@@ -251,8 +248,8 @@ class PeersManager with Holepunch, PEX {
   ///
   /// Usually [socket] is null , unless this peer was incoming connection, but
   /// this type peer was managed by [TorrentTask] , user don't need to know that.
-  void addNewPeerAddress(CompactAddress address,
-      [PeerType type = PeerType.TCP, Socket socket]) {
+  void addNewPeerAddress(CompactAddress? address,
+      [PeerType type = PeerType.TCP, dynamic socket]) {
     if (address == null) return;
     if (address.address == localExtenelIP) return;
     if (socket != null) {
@@ -262,7 +259,7 @@ class PeersManager with Holepunch, PEX {
       }
     }
     if (_peersAddress.add(address)) {
-      Peer peer;
+      Peer? peer;
       if (type == PeerType.TCP) {
         peer = Peer.newTCPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
             _metaInfo.pieces.length, socket);
@@ -446,10 +443,10 @@ class PeersManager with Holepunch, PEX {
     }
     var peer = source as Peer;
 
-    Piece piece;
+    Piece? piece;
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
-      if (!piece.haveAvalidateSubPiece()) {
+      if (piece != null && !piece.haveAvalidateSubPiece()) {
         piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
             _pieceProvider, peer.remoteSuggestPieces);
       }
@@ -459,7 +456,7 @@ class PeersManager with Holepunch, PEX {
     }
     if (piece == null) return;
 
-    var subIndex = piece.popSubPiece();
+    var subIndex = piece.popSubPiece()!;
     var size = DEFAULT_REQUEST_LENGTH; // block大小现算
     var begin = subIndex * size;
     if ((begin + size) > piece.byteLength) {
@@ -497,7 +494,7 @@ class PeersManager with Holepunch, PEX {
       var peer = source as Peer;
       _pausedRemoteRequest[peer.id] ??= [];
       var pausedRequest = _pausedRemoteRequest[peer.id];
-      pausedRequest.add([source, index, begin, length]);
+      pausedRequest?.add([source, index, begin, length]);
       return;
     }
     var peer = source as Peer;
@@ -514,7 +511,7 @@ class PeersManager with Holepunch, PEX {
     _processBitfieldUpdate(source, null);
   }
 
-  void _processBitfieldUpdate(dynamic source, Bitfield bitfield) {
+  void _processBitfieldUpdate(dynamic source, Bitfield? bitfield) {
     var peer = source as Peer;
     if (bitfield != null) {
       if (peer.interestedRemote) return;
@@ -604,7 +601,7 @@ class PeersManager with Holepunch, PEX {
   }
 
   void _sendKeepAliveToAll() {
-    _activePeers?.forEach((peer) {
+    _activePeers.forEach((peer) {
       Timer.run(() => _keepAlive(peer));
     });
   }
@@ -654,7 +651,7 @@ class PeersManager with Holepunch, PEX {
   }
 
   Future disposeAllSeeder([dynamic reason]) async {
-    _activePeers?.forEach((peer) async {
+    _activePeers.forEach((peer) async {
       if (peer.isSeeder) {
         await peer.dispose(reason);
       }

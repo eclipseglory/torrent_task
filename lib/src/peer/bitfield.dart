@@ -9,7 +9,7 @@ class Bitfield {
   final int piecesNum;
   final Uint8List buffer;
 
-  List<int> _completedIndex;
+  List<int>? _completedIndex;
   Bitfield(this.piecesNum, this.buffer);
 
   bool getBit(int index) {
@@ -30,7 +30,7 @@ class Bitfield {
     var orNum = BASE_NUM >> b;
     if (bit) {
       _completedIndex = completedPieces;
-      _completedIndex.add(index);
+      _completedIndex?.add(index);
       buffer[i] = buffer[i] | orNum;
     } else {
       _completedIndex?.remove(index);
@@ -81,13 +81,13 @@ class Bitfield {
           for (var j = 0; j < 8; j++) {
             var index = i * 8 + j;
             if (getBit(index)) {
-              _completedIndex.add(index);
+              _completedIndex?.add(index);
             }
           }
         }
       }
     }
-    return _completedIndex;
+    return _completedIndex!;
   }
 
   int get length => buffer.length;
@@ -105,7 +105,7 @@ class Bitfield {
   }
 
   static Bitfield copyFrom(int piecesNum, List<int> list,
-      [int offset = 0, int end]) {
+      [int offset = 0, int? end]) {
     var b = piecesNum ~/ 8;
     if (b * 8 != piecesNum) b++;
     var mybuffer = Uint8List(b);

@@ -57,7 +57,7 @@ mixin PeerEventDispatcher {
     });
   }
 
-  void fireHandshakeEvent(String remotePeerId, dynamic data) {
+  void fireHandshakeEvent(String? remotePeerId, dynamic data) {
     var fSet = _handleFunctions[PEER_EVENT_HANDSHAKE];
     fSet?.forEach((f) {
       Timer.run(() => f(this, remotePeerId, data));
@@ -92,7 +92,7 @@ mixin PeerEventDispatcher {
     });
   }
 
-  void fireBitfield(final Bitfield bitfield) {
+  void fireBitfield(final Bitfield? bitfield) {
     var fSet = _handleFunctions[PEER_EVENT_BITFIELD];
     fSet?.forEach((f) {
       Timer.run(() => f(this, bitfield));

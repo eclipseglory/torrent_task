@@ -10,12 +10,12 @@ const DOWNLOADED_TYPE = 'downloaded';
 const UPLOADED_TYPE = 'uploaded';
 
 ///
-/// 下载状态保存文件
+/// Download state save file
 ///
-/// 文件内容：`<bitfield><download>`,其中`<download>`是一个64位整数，
-/// 文件名：`<infohash>.bt.state`
+/// Document Content：`<bitfield><download>`,where`<download>`is a 64-bit integer，
+/// file name：`<infohash>.bt.state`
 class StateFile {
-  Bitfield _bitfield;
+  late Bitfield _bitfield;
 
   bool _closed = false;
 
@@ -25,13 +25,13 @@ class StateFile {
 
   StateFile(this.metainfo);
 
-  RandomAccessFile _access;
+  RandomAccessFile? _access;
 
-  File _bitfieldFile;
+  File? _bitfieldFile;
 
-  StreamSubscription _ss;
+  StreamSubscription? _ss;
 
-  StreamController _sc;
+  StreamController? _sc;
 
   bool get isClosed => _closed;
 
@@ -45,11 +45,14 @@ class StateFile {
   Bitfield get bitfield => _bitfield;
 
   int get downloaded {
-    var _downloaded = bitfield.completedPieces.length * metainfo.pieceLength;
-    if (bitfield.completedPieces.contains(bitfield.piecesNum - 1)) {
-      _downloaded -= metainfo.pieceLength - metainfo.lastPriceLength;
+    if (bitfield != null && bitfield.completedPieces != null) {
+      var _downloaded = bitfield.completedPieces!.length * metainfo.pieceLength;
+      if (bitfield.completedPieces!.contains(bitfield.piecesNum - 1)) {
+        _downloaded -= metainfo.pieceLength - metainfo.lastPieceLength;
+      }
+      return _downloaded;
     }
-    return _downloaded;
+    return 0;
   }
 
   int get uploaded => _uploaded;
@@ -61,16 +64,16 @@ class StateFile {
     }
 
     _bitfieldFile = File('${directoryPath}${metainfo.infoHash}.bt.state');
-    var exists = await _bitfieldFile.exists();
-    if (!exists) {
-      _bitfieldFile = await _bitfieldFile.create(recursive: true);
+    var exists = await _bitfieldFile?.exists();
+    if (exists != null && !exists) {
+      _bitfieldFile = await _bitfieldFile?.create(recursive: true);
       _bitfield = Bitfield.createEmptyBitfield(metainfo.pieces.length);
       _uploaded = 0;
-      var acc = await _bitfieldFile.open(mode: FileMode.writeOnly);
-      acc = await acc.truncate(_bitfield.length + 8);
-      await acc.close();
+      var acc = await _bitfieldFile?.open(mode: FileMode.writeOnly);
+      acc = await acc?.truncate(_bitfield.length + 8);
+      await acc?.close();
     } else {
-      var bytes = await _bitfieldFile.readAsBytes();
+      var bytes = await _bitfieldFile!.readAsBytes();
       var piecesNum = metainfo.pieces.length;
       var bitfieldBufferLength = piecesNum ~/ 8;
       if (bitfieldBufferLength * 8 != piecesNum) bitfieldBufferLength++;
@@ -79,13 +82,13 @@ class StateFile {
       _uploaded = view.getUint64(_bitfield.length);
     }
 
-    return _bitfieldFile;
+    return _bitfieldFile!;
   }
 
   Future<bool> update(int index, {bool have = true, int uploaded = 0}) async {
     _access = await getAccess();
     var completer = Completer<bool>();
-    _sc.add({
+    _sc?.add({
       'type': 'single',
       'index': index,
       'uploaded': uploaded,
@@ -96,10 +99,10 @@ class StateFile {
   }
 
   Future<bool> updateAll(List<int> indices,
-      {List<bool> have, int uploaded = 0}) async {
+      {List<bool>? have, int uploaded = 0}) async {
     _access = await getAccess();
     var completer = Completer<bool>();
-    _sc.add({
+    _sc?.add({
       'type': 'all',
       'indices': indices,
       'uploaded': uploaded,
@@ -121,22 +124,22 @@ class StateFile {
       }
       _bitfield.setBit(index, have);
     } else {
-      if (_uploaded == uploaded) return false;
+      if (_uploaded == uploaded) return;
     }
     _uploaded = uploaded;
     try {
       var access = await getAccess();
       if (index != -1) {
         var i = index ~/ 8;
-        await access.setPosition(i);
-        await access.writeByte(_bitfield.buffer[i]);
+        await access?.setPosition(i);
+        await access?.writeByte(_bitfield.buffer[i]);
       }
-      await access.setPosition(_bitfield.buffer.length);
+      await access?.setPosition(_bitfield.buffer.length);
       var data = Uint8List(8);
       var d = ByteData.view(data.buffer);
       d.setUint64(0, uploaded);
-      access = await access.writeFrom(data);
-      await access.flush();
+      access = await access?.writeFrom(data);
+      await access?.flush();
       c.complete(true);
     } catch (e) {
       log('Update bitfield piece:[$index],uploaded:$uploaded error :',
@@ -161,21 +164,21 @@ class StateFile {
   }
 
   void _processRequest(event) async {
-    _ss.pause();
+    _ss?.pause();
     // if (event['type'] == 'all') {
     //   await _updateAll(event);
     // }
     if (event['type'] == 'single') {
       await _update(event);
     }
-    _ss.resume();
+    _ss?.resume();
   }
 
-  Future<RandomAccessFile> getAccess() async {
+  Future<RandomAccessFile?> getAccess() async {
     if (_access == null) {
-      _access = await _bitfieldFile.open(mode: FileMode.writeOnlyAppend);
+      _access = await _bitfieldFile?.open(mode: FileMode.writeOnlyAppend);
       _sc = StreamController();
-      _ss = _sc.stream.listen(_processRequest, onError: (e) => print(e));
+      _ss = _sc?.stream.listen(_processRequest, onError: (e) => print(e));
     }
     return _access;
   }
@@ -197,7 +200,7 @@ class StateFile {
     }
   }
 
-  Future<FileSystemEntity> delete() async {
+  Future<FileSystemEntity?> delete() async {
     await close();
     var r = _bitfieldFile?.delete();
     _bitfieldFile = null;

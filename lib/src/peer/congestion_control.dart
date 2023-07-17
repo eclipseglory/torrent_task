@@ -20,11 +20,11 @@ mixin CongestionControl {
   // 初始是10秒
   double _rto = 10000000;
 
-  double _srtt;
+  double? _srtt;
 
-  double _rttvar;
+  double? _rttvar;
 
-  Timer _timeout;
+  Timer? _timeout;
 
   int _allowWindowSize = DEFAULT_REQUEST_LENGTH;
 
@@ -52,10 +52,10 @@ mixin CongestionControl {
       _srtt = rtt.toDouble();
       _rttvar = rtt / 2;
     } else {
-      _rttvar = (1 - 0.25) * _rttvar + 0.25 * (_srtt - rtt).abs();
-      _srtt = (1 - 0.125) * _srtt + 0.125 * rtt;
+      _rttvar = (1 - 0.25) * _rttvar! + 0.25 * (_srtt! - rtt).abs();
+      _srtt = (1 - 0.125) * _srtt! + 0.125 * rtt;
     }
-    _rto = _srtt + max(100000, 4 * _rttvar);
+    _rto = _srtt! + max(100000, 4 * _rttvar!);
     // 不到1秒，就设置为1秒
     _rto = max(_rto, 1000000);
   }
@@ -108,20 +108,20 @@ mixin CongestionControl {
   void ackRequest(List<List<int>> requests) {
     if (requests.isEmpty) return;
     var downloaded = 0;
-    int minRtt;
+    int? minRtt;
     requests.forEach((request) {
       // 重发后收到的不管
       if (request == null || request[4] != 0) return;
       var now = DateTime.now().microsecondsSinceEpoch;
       var rtt = now - request[3];
       minRtt ??= rtt;
-      minRtt = min(minRtt, rtt);
+      minRtt = min(minRtt!, rtt);
       updateRTO(rtt);
       downloaded += request[2];
     });
     if (downloaded == 0 || minRtt == null) return;
     var artt = minRtt;
-    var delay_factor = (CCONTROL_TARGET - artt) / CCONTROL_TARGET;
+    var delay_factor = (CCONTROL_TARGET - artt!) / CCONTROL_TARGET;
     var window_factor = downloaded / _allowWindowSize;
     var scaled_gain =
         MAX_CWND_INCREASE_REQUESTS_PER_RTT * delay_factor * window_factor;

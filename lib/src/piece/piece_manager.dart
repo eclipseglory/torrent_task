@@ -34,7 +34,7 @@ class PieceManager implements PieceProvider {
     for (var i = 0; i < metaInfo.pieces.length; i++) {
       var byteLength = metaInfo.pieceLength;
       if (i == metaInfo.pieces.length - 1) {
-        byteLength = metaInfo.lastPriceLength;
+        byteLength = metaInfo.lastPieceLength;
       }
       var piece = Piece(metaInfo.pieces[i], i, byteLength);
       if (!bitfield.getBit(i)) _pieces[i] = piece;
@@ -63,8 +63,8 @@ class PieceManager implements PieceProvider {
     }
   }
 
-  Piece selectPiece(String remotePeerId, List<int> remoteHavePieces,
-      PieceProvider provider, final Set<int> suggestPieces) {
+  Piece? selectPiece(String remotePeerId, List<int> remoteHavePieces,
+      PieceProvider provider, final Set<int>? suggestPieces) {
     // 查看当前下载piece中是否可以使用该peer
     var avalidatePiece = <int>[];
     // 优先下载Suggest Pieces
@@ -133,7 +133,7 @@ class PieceManager implements PieceProvider {
   }
 
   @override
-  Piece operator [](index) {
+  Piece? operator [](index) {
     return _pieces[index];
   }
 

@@ -6,7 +6,7 @@ import 'package:bencode_dart/bencode_dart.dart';
 mixin ExtendedProcessor {
   final Map<int, String> _extendedEventMap = {};
   int _id = 1;
-  Map _rawMap;
+  Map? _rawMap;
   final Map<int, String> _localExtended = <int, String>{};
 
   Map<String, int> get localExtened {
@@ -35,9 +35,9 @@ mixin ExtendedProcessor {
     _id++;
   }
 
-  int getExtendedEventId(String name) {
+  int? getExtendedEventId(String name) {
     if (_rawMap != null) {
-      return _rawMap[name];
+      return _rawMap![name];
     }
     return null;
   }

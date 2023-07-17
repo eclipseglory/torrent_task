@@ -21,7 +21,7 @@ mixin Holepunch {
   ];
 
   List<int> getRendezvousMessage(CompactAddress address) {
-    List<int> message;
+    List<int> message = List.empty();
     if (address.address.type == InternetAddressType.IPv4) {
       message = List<int>.filled(12, 0);
       List.copyRange(message, 2, address.toBytes());
@@ -46,7 +46,7 @@ mixin Holepunch {
     var type = data[0];
     var iptype = data[1];
     var offset = 0;
-    CompactAddress ip;
+    CompactAddress? ip;
     try {
       if (iptype == 0) {
         ip = CompactAddress.parseIPv4Address(data, 2);
@@ -58,10 +58,11 @@ mixin Holepunch {
     } catch (e) {
       // do nothing
     }
-    var err;
+    if (ip == null) return;
+    int err;
     if (type == 0x02) {
       var e = Uint8List(4);
-      // 有些客户端返回的error不到4位：
+      // Some clients return less than 4 errors：
       if (data.length < offset + 4) {
         var start = offset + 4 - data.length;
         List.copyRange(e, start, data, offset);
@@ -70,24 +71,24 @@ mixin Holepunch {
       }
       err = ByteData.view(e.buffer).getUint32(0);
       if (err >= 1000) {
-        err = e[0]; // 有些客户端把错误码放在第一位
+        err = e[0]; // Some clients put the error code first
       }
       err--;
       var errMsg = 'Unknown error';
       if (err >= 0) {
         errMsg = ERROR_MSG[err];
       }
-      Timer.run(() => holePunchError(errMsg, ip));
+      Timer.run(() => holePunchError(errMsg, ip!));
       return;
     }
 
     if (type == 0x00) {
-      Timer.run(() => holePunchRendezvous(ip));
+      Timer.run(() => holePunchRendezvous(ip!));
       return;
     }
 
     if (type == 0x01) {
-      Timer.run(() => holePunchConnect(ip));
+      Timer.run(() => holePunchConnect(ip!));
       return;
     }
   }

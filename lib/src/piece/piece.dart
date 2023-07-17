@@ -11,7 +11,7 @@ class Piece {
 
   final Set<String> _avalidatePeers = <String>{};
 
-  Queue<int> _subPiecesQueue;
+  late Queue<int> _subPiecesQueue;
 
   final Set<int> _downloadedSubPieces = <int>{};
 
@@ -86,7 +86,6 @@ class Piece {
     return _writtingSubPieces.add(subindex);
   }
 
-
   bool subPieceWriteComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
     // _subPiecesQueue.remove(subindex); // 有这可能？
@@ -103,7 +102,7 @@ class Piece {
   ///
   ///当子Piece被弹出栈用于下载，或者子Piece已经下载完成，那么就视为该Piece已经不再包含该子Piece
   bool containsSubpiece(int subIndex) {
-    return subPieceQueue?.contains(subIndex);
+    return subPieceQueue.contains(subIndex);
   }
 
   bool containsAvalidatePeer(String id) {
@@ -111,7 +110,7 @@ class Piece {
   }
 
   bool removeSubpiece(int subIndex) {
-    return subPieceQueue?.remove(subIndex);
+    return subPieceQueue.remove(subIndex);
   }
 
   bool addAvalidatePeer(String id) {
@@ -126,7 +125,7 @@ class Piece {
     _avalidatePeers.clear();
   }
 
-  int popSubPiece() {
+  int? popSubPiece() {
     if (subPieceQueue.isNotEmpty) return subPieceQueue.removeFirst();
     return null;
   }
@@ -139,7 +138,7 @@ class Piece {
     return true;
   }
 
-  int popLastSubPiece() {
+  int? popLastSubPiece() {
     if (subPieceQueue.isNotEmpty) return subPieceQueue.removeLast();
     return null;
   }

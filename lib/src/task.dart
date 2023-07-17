@@ -52,7 +52,7 @@ abstract class TorrentTask {
   int get utpPeerCount;
 
   /// Downloaded total bytes length
-  int get downloaded;
+  int? get downloaded;
 
   /// Downloaded percent
   double get progress;
@@ -117,19 +117,19 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   final Set<void Function()> _pauseHandlers = {};
 
-  TorrentAnnounceTracker _tracker;
+  TorrentAnnounceTracker? _tracker;
 
-  DHT _dht;
+  DHT? _dht = DHT();
 
-  LSD _lsd;
+  LSD? _lsd;
 
-  StateFile _stateFile;
+  StateFile? _stateFile;
 
-  PieceManager _pieceManager;
+  PieceManager? _pieceManager;
 
-  DownloadFileManager _fileManager;
+  DownloadFileManager? _fileManager;
 
-  PeersManager _peersManager;
+  PeersManager? _peersManager;
 
   final Torrent _metaInfo;
 
@@ -137,9 +137,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   final Set<String> _peerIds = {};
 
-  String _peerId; // 这个是生成的本地peer的id，和Peer类的id是两回事
+  late String _peerId; // 这个是生成的本地peer的id，和Peer类的id是两回事
 
-  ServerSocket _serverSocket;
+  ServerSocket? _serverSocket;
 
   final Set<InternetAddress> _cominIp = {};
 
@@ -152,7 +152,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   double get averageDownloadSpeed {
     if (_peersManager != null) {
-      return _peersManager.averageDownloadSpeed;
+      return _peersManager!.averageDownloadSpeed;
     } else {
       return 0.0;
     }
@@ -161,7 +161,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   double get averageUploadSpeed {
     if (_peersManager != null) {
-      return _peersManager.averageUploadSpeed;
+      return _peersManager!.averageUploadSpeed;
     } else {
       return 0.0;
     }
@@ -170,7 +170,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   double get currentDownloadSpeed {
     if (_peersManager != null) {
-      return _peersManager.currentDownloadSpeed;
+      return _peersManager!.currentDownloadSpeed;
     } else {
       return 0.0;
     }
@@ -179,40 +179,40 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   double get uploadSpeed {
     if (_peersManager != null) {
-      return _peersManager.uploadSpeed;
+      return _peersManager!.uploadSpeed;
     } else {
       return 0.0;
     }
   }
 
-  String _infoHashString;
+  late String _infoHashString;
 
-  Timer _dhtRepeatTimer;
+  Timer? _dhtRepeatTimer;
 
   Future<PeersManager> _init(Torrent model, String savePath) async {
-    _dht = DHT();
     _lsd = LSD(model.infoHash, _peerId);
     _infoHashString = String.fromCharCodes(model.infoHashBuffer);
     _tracker ??= TorrentAnnounceTracker(this);
     _stateFile ??= await StateFile.getStateFile(savePath, model);
     _pieceManager ??= PieceManager.createPieceManager(
-        BasePieceSelector(), model, _stateFile.bitfield);
+        BasePieceSelector(), model, _stateFile!.bitfield);
     _fileManager ??= await DownloadFileManager.createFileManager(
-        model, savePath, _stateFile);
+        model, savePath, _stateFile!);
     _peersManager ??= PeersManager(
-        _peerId, _pieceManager, _pieceManager, _fileManager, model);
-    return _peersManager;
+        _peerId, _pieceManager!, _pieceManager!, _fileManager!, model);
+    return _peersManager!;
   }
 
   @override
   void addPeer(CompactAddress address,
-      [PeerType type = PeerType.TCP, Socket socket]) {
-    _peersManager.addNewPeerAddress(address, type, socket);
+      [PeerType type = PeerType.TCP, Socket? socket]) {
+    _peersManager?.addNewPeerAddress(address, type, socket);
   }
 
   void _whenTaskDownloadComplete() async {
-    await _peersManager.disposeAllSeeder('Download complete,disconnect seeder');
-    await _tracker.complete();
+    await _peersManager
+        ?.disposeAllSeeder('Download complete,disconnect seeder');
+    await _tracker?.complete();
     _fireTaskComplete();
   }
 
@@ -220,7 +220,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _fireFileComplete(filePath);
   }
 
-  void _processTrackerPeerEvent(Tracker source, PeerEvent event) {
+  void _processTrackerPeerEvent(Tracker source, PeerEvent? event) {
     if (event == null) return;
     var ps = event.peers;
     if (ps != null && ps.isNotEmpty) {
@@ -235,7 +235,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   void _processNewPeerFound(CompactAddress url) {
-    _peersManager.addNewPeerAddress(url);
+    _peersManager?.addNewPeerAddress(url);
   }
 
   void _processDHTPeer(CompactAddress peer, String infoHash) {
@@ -255,7 +255,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
     log('incoming connect: ${socket.remoteAddress.address}:${socket.remotePort}',
         name: runtimeType.toString());
-    _peersManager.addNewPeerAddress(
+    _peersManager?.addNewPeerAddress(
         CompactAddress(socket.address, socket.port), PeerType.TCP, socket);
   }
 
@@ -284,38 +284,38 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     // 进入的peer：
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
     await _init(_metaInfo, _savePath);
-    _serverSocket.listen(_hookInPeer);
+    _serverSocket?.listen(_hookInPeer);
     // _utpServer ??= await ServerUTPSocket.bind(InternetAddress.anyIPv4, 0);
     // _utpServer.listen(_hookUTP);
     // print(_utpServer.port);
 
     var map = {};
     map['name'] = _metaInfo.name;
-    map['tcp_socket'] = _serverSocket.port;
-    map['comoplete_pieces'] = List.from(_stateFile.bitfield.completedPieces);
-    map['total_pieces_num'] = _stateFile.bitfield.piecesNum;
-    map['downloaded'] = _stateFile.downloaded;
-    map['uploaded'] = _stateFile.uploaded;
+    map['tcp_socket'] = _serverSocket?.port;
+    map['comoplete_pieces'] = List.from(_stateFile!.bitfield.completedPieces);
+    map['total_pieces_num'] = _stateFile!.bitfield.piecesNum;
+    map['downloaded'] = _stateFile!.downloaded;
+    map['uploaded'] = _stateFile!.uploaded;
     map['total_length'] = _metaInfo.length;
     // 主动访问的peer:
-    _tracker.onPeerEvent(_processTrackerPeerEvent);
-    _peersManager.onAllComplete(_whenTaskDownloadComplete);
-    _fileManager.onFileComplete(_whenFileDownloadComplete);
+    _tracker?.onPeerEvent(_processTrackerPeerEvent);
+    _peersManager?.onAllComplete(_whenTaskDownloadComplete);
+    _fileManager?.onFileComplete(_whenFileDownloadComplete);
 
-    _lsd.onLSDPeer(_processLSDPeerEvent);
-    _lsd.port = _serverSocket.port;
-    _lsd.start();
+    _lsd?.onLSDPeer(_processLSDPeerEvent);
+    _lsd?.port = _serverSocket?.port;
+    _lsd?.start();
 
-    _dht.announce(
-        String.fromCharCodes(_metaInfo.infoHashBuffer), _serverSocket.port);
-    _dht.onNewPeer(_processDHTPeer);
+    _dht?.announce(
+        String.fromCharCodes(_metaInfo.infoHashBuffer), _serverSocket!.port);
+    _dht?.onNewPeer(_processDHTPeer);
     // ignore: unawaited_futures
-    _dht.bootstrap();
-    if (_fileManager.isAllComplete) {
+    _dht?.bootstrap();
+    if (_fileManager != null && _fileManager!.isAllComplete) {
       // ignore: unawaited_futures
-      _tracker.complete();
+      _tracker?.complete();
     } else {
-      _tracker.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
+      _tracker?.runTrackers(_metaInfo.announces, _metaInfo.infoHashBuffer,
           event: EVENT_STARTED);
     }
     return map;
@@ -324,7 +324,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   Future stop([bool force = false]) async {
     await _tracker?.stop(force);
-    var tempHandler = Set<Function>.from(_stopHandlers);
+    Set<Function>? tempHandler = Set<Function>.from(_stopHandlers);
     await dispose();
     tempHandler.forEach((element) {
       Timer.run(() => element());
@@ -368,7 +368,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     var map = {
       'downloaded': _stateFile?.downloaded,
       'uploaded': _stateFile?.uploaded,
-      'left': _metaInfo.length - _stateFile.downloaded,
+      'left': _metaInfo.length - _stateFile!.downloaded,
       'numwant': 50,
       'compact': 1,
       'peerId': _peerId,
@@ -440,7 +440,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  int get downloaded => _fileManager?.downloaded;
+  int? get downloaded => _fileManager?.downloaded;
 
   @override
   double get progress {
@@ -466,7 +466,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   int get allPeersNumber {
     if (_peersManager != null) {
-      return _peersManager.peersNumber;
+      return _peersManager!.peersNumber;
     } else {
       return 0;
     }
@@ -480,7 +480,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   int get connectedPeersNumber {
     if (_peersManager != null) {
-      return _peersManager.connectedPeersNumber;
+      return _peersManager!.connectedPeersNumber;
     } else {
       return 0;
     }
@@ -489,7 +489,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   int get seederNumber {
     if (_peersManager != null) {
-      return _peersManager.seederNumber;
+      return _peersManager!.seederNumber;
     } else {
       return 0;
     }
@@ -499,21 +499,21 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   @override
   double get utpDownloadSpeed {
     if (_peersManager == null) return 0.0;
-    return _peersManager.utpDownloadSpeed;
+    return _peersManager!.utpDownloadSpeed;
   }
 
 // TODO debug:
   @override
   double get utpUploadSpeed {
     if (_peersManager == null) return 0.0;
-    return _peersManager.utpUploadSpeed;
+    return _peersManager!.utpUploadSpeed;
   }
 
 // TODO debug:
   @override
   int get utpPeerCount {
     if (_peersManager == null) return 0;
-    return _peersManager.utpPeerCount;
+    return _peersManager!.utpPeerCount;
   }
 
   @override

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:bencode_dart/bencode_dart.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
@@ -17,7 +18,7 @@ const pex_flag_supports_holepunch = 0x08;
 const pex_flag_reachable = 0x10;
 
 mixin PEX {
-  Timer _timer;
+  Timer? _timer;
 
   final Set<CompactAddress> _lastUTPEX = <CompactAddress>{};
 
@@ -61,7 +62,7 @@ mixin PEX {
   }
 
   dynamic parsePEXDatas(dynamic source, List<int> message) {
-    var datas = decode(message);
+    var datas = decode(Uint8List.fromList(message));
     _parseAdded(source, datas);
     _parseAdded(source, datas, 'added6', InternetAddressType.IPv6);
   }
@@ -74,7 +75,7 @@ mixin PEX {
       if (added is! List<int>) {
         added = _convert(added);
       }
-      List ips;
+      List? ips;
       try {
         if (type == InternetAddressType.IPv4) {
           ips = CompactAddress.parseIPv4Addresses(added);
@@ -111,7 +112,7 @@ mixin PEX {
             if (f & pex_flag_reachable == pex_flag_reachable) {
               opts['reachable'] = true;
             }
-            Timer.run(() => addPEXPeer(source, ips[i], opts));
+            Timer.run(() => addPEXPeer(source, ips?[i], opts));
           }
         }
       }
@@ -120,7 +121,7 @@ mixin PEX {
 
   void addPEXPeer(dynamic source, CompactAddress address, Map options);
 
-  List<int> _convert(List added) {
+  List<int>? _convert(List added) {
     var intList = <int>[];
     for (var i = 0; i < added.length; i++) {
       var n = added[i];

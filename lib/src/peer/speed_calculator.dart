@@ -12,7 +12,7 @@ mixin SpeedCalculator {
     if (_downloadedHistory.isEmpty) return 0.0;
     var now = DateTime.now().microsecondsSinceEpoch;
     var d = 0;
-    int s;
+    int? s;
     for (var i = 0; i < _downloadedHistory.length;) {
       var dd = _downloadedHistory[i];
       if ((now - dd[1]) > RECORD_TIME) {
@@ -25,7 +25,7 @@ mixin SpeedCalculator {
       }
     }
     if (d == 0) return 0.0;
-    var passed = now - s;
+    var passed = now - s!;
     if (passed == 0) return 0.0;
     return (d / 1024) / (passed / 1000000);
   }
@@ -45,16 +45,16 @@ mixin SpeedCalculator {
   }
 
   /// 从连接开始，直到peer销毁之前所持续时间
-  int get livingTime {
+  int? get livingTime {
     if (_startTime == null) return null;
     var e = _endTime;
     e ??= DateTime.now().microsecondsSinceEpoch;
-    return e - _startTime;
+    return e - _startTime!;
   }
 
-  int _startTime;
+  int? _startTime;
 
-  int _endTime;
+  int? _endTime;
 
   int _downloaded = 0;
 

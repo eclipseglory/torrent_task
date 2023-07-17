@@ -11,7 +11,7 @@ export 'src/peer/peer_base.dart';
 const ID_PREFIX = '-DT0201-';
 
 /// 当前版本号
-Future<String> getTorrenTaskVersion() async {
+Future<String?> getTorrenTaskVersion() async {
   var file = File('pubspec.yaml');
   if (await file.exists()) {
     var lines = await file.readAsLines();

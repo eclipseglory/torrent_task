@@ -11,7 +11,7 @@ String generatePeerId([String prefix = ID_PREFIX]) {
   return id;
 }
 
-List<int> hexString2Buffer(String hexStr) {
+List<int>? hexString2Buffer(String hexStr) {
   // ignore: prefer_is_empty
   if (hexStr.isEmpty || hexStr.length.remainder(2) != 0) return null;
   var size = hexStr.length ~/ 2;

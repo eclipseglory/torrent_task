@@ -14,7 +14,7 @@ import 'piece_selector.dart';
 /// - 在可用`Peer`数量都相同的情况下，选用`Sub Piece`数量最少的
 class BasePieceSelector implements PieceSelector {
   @override
-  Piece selectPiece(
+  Piece? selectPiece(
       String remotePeerId, List<int> piecesIndexList, PieceProvider provider,
       [bool random = false]) {
     // random = true;

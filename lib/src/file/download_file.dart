@@ -15,15 +15,15 @@ class DownloadFile {
 
   final int length;
 
-  File _file;
+  File? _file;
 
-  RandomAccessFile _writeAcces;
+  RandomAccessFile? _writeAcces;
 
-  RandomAccessFile _readAccess;
+  RandomAccessFile? _readAccess;
 
-  StreamController _sc;
+  StreamController? _sc;
 
-  StreamSubscription _ss;
+  StreamSubscription? _ss;
 
   DownloadFile(this.filePath, this.start, this.length);
 
@@ -45,7 +45,7 @@ class DownloadFile {
       int position, List<int> block, int start, int end) async {
     _writeAcces ??= await getRandomAccessFile(WRITE);
     var completer = Completer<bool>();
-    _sc.add({
+    _sc?.add({
       'type': WRITE,
       'position': position,
       'block': block,
@@ -59,7 +59,7 @@ class DownloadFile {
   Future<List<int>> requestRead(int position, int length) async {
     _readAccess ??= await getRandomAccessFile(READ);
     var completer = Completer<List<int>>();
-    _sc.add({
+    _sc?.add({
       'type': READ,
       'position': position,
       'length': length,
@@ -72,7 +72,7 @@ class DownloadFile {
   ///
   /// 每次只处理一个请求。`Stream`在进入该方法后通过`StreamSubscription`暂停通道信息读取，直到处理完一条请求后才恢复
   void _processRequest(event) async {
-    _ss.pause();
+    _ss?.pause();
     if (event['type'] == WRITE) {
       await _write(event);
     }
@@ -82,10 +82,10 @@ class DownloadFile {
     if (event['type'] == FLUSH) {
       await _flush(event);
     }
-    _ss.resume();
+    _ss?.resume();
   }
 
-  void _write(event) async {
+  Future _write(event) async {
     Completer completer = event['completer'];
     try {
       int position = event['position'];
@@ -94,8 +94,8 @@ class DownloadFile {
       List<int> block = event['block'];
 
       _writeAcces = await getRandomAccessFile(WRITE);
-      _writeAcces = await _writeAcces.setPosition(position);
-      _writeAcces = await _writeAcces.writeFrom(block, start, end);
+      _writeAcces = await _writeAcces?.setPosition(position);
+      _writeAcces = await _writeAcces?.writeFrom(block, start, end);
       completer.complete(true);
     } catch (e) {
       log('Write file error:', error: e, name: runtimeType.toString());
@@ -107,15 +107,15 @@ class DownloadFile {
   Future<bool> requestFlush() async {
     _writeAcces ??= await getRandomAccessFile(WRITE);
     var completer = Completer<bool>();
-    _sc.add({'type': FLUSH, 'completer': completer});
+    _sc?.add({'type': FLUSH, 'completer': completer});
     return completer.future;
   }
 
-  void _flush(event) async {
+  Future _flush(event) async {
     Completer completer = event['completer'];
     try {
       _writeAcces = await getRandomAccessFile(WRITE);
-      await _writeAcces.flush();
+      await _writeAcces?.flush();
       completer.complete(true);
     } catch (e) {
       log('Flush error:', error: e, name: runtimeType.toString());
@@ -123,7 +123,7 @@ class DownloadFile {
     }
   }
 
-  void _read(event) async {
+  Future _read(event) async {
     Completer completer = event['completer'];
     try {
       int position = event['position'];
@@ -141,21 +141,19 @@ class DownloadFile {
 
   ///
   /// 获取对应文件，如果文件不存在会创建一个新文件
-  Future<File> _getOrCreateFile() async {
-    if (filePath == null) return null;
+  Future<File?> _getOrCreateFile() async {
     _file ??= File(filePath);
-    var exists = await _file.exists();
-    if (!exists) {
-      _file = await _file.create(recursive: true);
-      var access = await _file.open(mode: FileMode.write);
-      access = await access.truncate(length);
-      await access.close();
+    var exists = await _file?.exists();
+    if (exists != null && !exists) {
+      _file = await _file?.create(recursive: true);
+      var access = await _file?.open(mode: FileMode.write);
+      access = await access?.truncate(length);
+      await access?.close();
     }
     return _file;
   }
 
-  Future<bool> get exists {
-    if (filePath == null) return null;
+  Future<bool>? get exists {
     return File(filePath).exists();
   }
 
@@ -163,15 +161,15 @@ class DownloadFile {
     var file = await _getOrCreateFile();
     var access;
     if (type == WRITE) {
-      _writeAcces ??= await file.open(mode: FileMode.writeOnlyAppend);
+      _writeAcces ??= await file?.open(mode: FileMode.writeOnlyAppend);
       access = _writeAcces;
     } else if (type == READ) {
-      _readAccess ??= await file.open(mode: FileMode.read);
+      _readAccess ??= await file?.open(mode: FileMode.read);
       access = _readAccess;
     }
     if (_sc == null) {
       _sc = StreamController();
-      _ss = _sc.stream.listen(_processRequest);
+      _ss = _sc?.stream.listen(_processRequest);
     }
     return access;
   }
@@ -224,5 +222,5 @@ class DownloadFile {
   }
 
   @override
-  int get hashCode => filePath?.hashCode;
+  int get hashCode => filePath.hashCode;
 }

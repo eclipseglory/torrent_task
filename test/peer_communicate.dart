@@ -7,7 +7,7 @@ import 'package:dartorrent_common/dartorrent_common.dart';
 import 'package:torrent_task/torrent_task.dart';
 
 void main() async {
-  ServerSocket serverSocket;
+  ServerSocket? serverSocket;
   int serverPort;
   var infoBuffer = randomBytes(20);
   var piecesNum = 20;
@@ -140,7 +140,7 @@ void main() async {
   var pid = generatePeerId();
   var peer = Peer.newTCPPeer(
       pid,
-      CompactAddress(InternetAddress.tryParse('127.0.0.1'), serverPort),
+      CompactAddress(InternetAddress.tryParse('127.0.0.1')!, serverPort),
       infoBuffer,
       piecesNum,
       null);
@@ -197,8 +197,8 @@ void main() async {
     print('come out destroyed : $reason');
     await serverSocket?.close();
     serverSocket = null;
-    var callAll = callMap.values
-        .fold(true, (previousValue, element) => (previousValue && element));
+    var callAll = callMap.values.fold<bool>(
+        true, (previousValue, element) => (previousValue && element));
     assert(callAll);
   });
   print('connect to : ${peer.address}');
