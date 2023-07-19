@@ -68,9 +68,11 @@ class DownloadFile {
     return completer.future;
   }
 
-  /// 处理读写请求
+  /// Process read and write requests.
   ///
-  /// 每次只处理一个请求。`Stream`在进入该方法后通过`StreamSubscription`暂停通道信息读取，直到处理完一条请求后才恢复
+  /// Only one request is processed at a time. The Stream is paused through StreamSubscription
+  /// upon entering this method, and it resumes reading from the channel only after processing
+  /// the current request.
   void _processRequest(event) async {
     _ss?.pause();
     if (event['type'] == WRITE) {
@@ -103,7 +105,7 @@ class DownloadFile {
     }
   }
 
-  /// 请求将缓冲区写入磁盘
+  /// Request to write the buffer to disk.
   Future<bool> requestFlush() async {
     _writeAcces ??= await getRandomAccessFile(WRITE);
     var completer = Completer<bool>();
@@ -140,7 +142,7 @@ class DownloadFile {
   }
 
   ///
-  /// 获取对应文件，如果文件不存在会创建一个新文件
+  /// Get the corresponding file, and if the file does not exist, create a new file.
   Future<File?> _getOrCreateFile() async {
     _file ??= File(filePath);
     var exists = await _file?.exists();

@@ -125,8 +125,8 @@ void main() async {
       var id = String.fromCharCodes(block.getRange(2, 22));
       assert(id == peer.remotePeerId);
       if (index == 4) {
-        print('测试完毕 $callMap');
-        await peer.dispose(BadException('测试完成'));
+        print('Testing completed. $callMap');
+        await peer.dispose(BadException('Testing completed'));
       }
     });
     peer.onDispose((peer, [reason]) async {
@@ -190,7 +190,7 @@ void main() async {
       view.setUint8(i + 2, idcontent[i]);
     }
     peer.sendPiece(index, begin, content);
-    peer.sendChoke(true); // 测试allow fast
+    peer.sendChoke(true); // Testing "allow fast".
     peer.sendAllowFast(4);
   });
   peer.onDispose((peer, [reason]) async {

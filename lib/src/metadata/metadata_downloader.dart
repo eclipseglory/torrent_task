@@ -123,7 +123,8 @@ class MetadataDownloader
     if (!_running) return;
     if (address.address == localExtenelIP) return;
     if (socket != null) {
-      // 说明是主动连接的peer,目前只允许一个ip连一次
+      //  Indicates that it is an actively connecting peer, and currently, only
+      //  one connection per IP address is allowed.
       if (!_incomingAddress.add(address.address)) {
         return;
       }
@@ -157,7 +158,7 @@ class MetadataDownloader
     return _activePeers.contains(id);
   }
 
-  /// 支持哪些扩展在这里添加
+  /// Add supported extensions here
   void _registerExtended(Peer peer) {
     peer.registerExtened('ut_metadata');
     peer.registerExtened('ut_pex');
@@ -260,7 +261,7 @@ class MetadataDownloader
         if (msg['msg_type'] == 2) {
           var piece = msg['piece'];
           if (piece != null && piece < _metaDataBlockNum) {
-            _metaDataPieces.add(piece); //退还拒绝的piece
+            _metaDataPieces.add(piece); //Return rejected piece
             var timer = _requestTimeout.remove(remotePeerId);
             timer?.cancel();
             _requestMetaData();
@@ -273,7 +274,7 @@ class MetadataDownloader
   }
 
   void _pieceDownloadComplete(int piece, int start, List<int> bytes) async {
-    // 防止多次调用
+    // Prevent multiple invocations"
     if (_completedPieces.length >= _metaDataBlockNum! ||
         _completedPieces.contains(piece)) {
       return;
@@ -282,7 +283,7 @@ class MetadataDownloader
     List.copyRange(_infoDatas, started, bytes, start);
     _completedPieces.add(piece);
     if (_completedPieces.length >= _metaDataBlockNum!) {
-      // 此时就停止，然后抛出事件
+      // At this point, stop and emit the event
       await stop();
       for (var h in _handlers) {
         Timer.run(() {

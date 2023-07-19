@@ -22,7 +22,7 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 
 ///
 /// TODO:
-/// - 没有处理对外的Suggest Piece/Fast Allow
+/// - The external Suggest Piece/Fast Allow requests are not handled.
 class PeersManager with Holepunch, PEX {
   final List<InternetAddress> IGNORE_IPS = [
     InternetAddress.tryParse('0.0.0.0')!,
@@ -41,7 +41,7 @@ class PeersManager with Holepunch, PEX {
 
   InternetAddress? localExtenelIP;
 
-  /// 写入磁盘的缓存最大值
+  /// The maximum size of the disk write cache.
   int maxWriteBufferSize;
 
   final _flushIndicesBuffer = <int>{};
@@ -191,7 +191,7 @@ class PeersManager with Holepunch, PEX {
     peer.connect();
   }
 
-  /// 支持哪些扩展在这里添加
+  ///  Add supported extensions here
   void _registerExtended(Peer peer) {
     peer.registerExtened('ut_pex');
     peer.registerExtened('ut_holepunch');
@@ -252,7 +252,7 @@ class PeersManager with Holepunch, PEX {
     if (address == null) return;
     if (address.address == localExtenelIP) return;
     if (socket != null) {
-      // 说明是主动连接的peer,目前只允许一个ip连一次
+      // Indicates that it is an actively connected peer, and currently, only one IP address is allowed to connect at a time.
       if (!_incomingAddress.add(address.address)) {
         return;
       }
@@ -350,7 +350,7 @@ class PeersManager with Holepunch, PEX {
     }
   }
 
-  /// 即使对方choke了我，也可以下载
+  /// Even if the other peer has choked me, I can still download.
   void _processAllowFast(dynamic source, int index) {
     var peer = source as Peer;
     var piece = _pieceProvider[index];
@@ -373,7 +373,7 @@ class PeersManager with Holepunch, PEX {
     for (var element in requests) {
       var pindex = element[0];
       var begin = element[1];
-      // TODO 这里很危险，目前都是已16kb来分解一个piece，如果不是呢？
+      // TODO This is dangerous here. Currently, we are dividing a piece into 16 KB chunks. What if it's not the case?
       var piece = _pieceManager[pindex];
       var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
       piece?.pushSubPiece(subindex);
@@ -456,7 +456,7 @@ class PeersManager with Holepunch, PEX {
     if (piece == null) return;
 
     var subIndex = piece.popSubPiece()!;
-    var size = DEFAULT_REQUEST_LENGTH; // block大小现算
+    var size = DEFAULT_REQUEST_LENGTH; // Block size is calculated dynamically.
     var begin = subIndex * size;
     if ((begin + size) > piece.byteLength) {
       size = piece.byteLength - begin;
@@ -515,7 +515,8 @@ class PeersManager with Holepunch, PEX {
     if (bitfield != null) {
       if (peer.interestedRemote) return;
       if (_fileManager.isAllComplete && peer.isSeeder) {
-        peer.dispose(BadException('已经下载完成不再连接Seeder'));
+        peer.dispose(BadException(
+            "Do not connect to Seeder if the download is already completed"));
         return;
       }
       for (var i = 0; i < _fileManager.piecesNumber; i++) {
@@ -550,13 +551,13 @@ class PeersManager with Holepunch, PEX {
 
   void _processChokeChange(dynamic source, bool choke) {
     var peer = source as Peer;
-    // 更新pieces的可用Peer
+    // Update available peers for pieces.
     if (!choke) {
       var completedPieces = peer.remoteCompletePieces;
       for (var index in completedPieces) {
         _pieceProvider[index]?.addAvalidatePeer(peer.id);
       }
-      // 这里开始通知request;
+      // Here, start notifying requests.
       Timer.run(() => _requestPieces(peer));
     } else {
       var completedPieces = peer.remoteCompletePieces;
@@ -571,7 +572,7 @@ class PeersManager with Holepunch, PEX {
     if (interested) {
       peer.sendChoke(false);
     } else {
-      peer.sendChoke(true); // 不感兴趣就choke它
+      peer.sendChoke(true); // Choke it if not interested.
     }
   }
 
@@ -589,7 +590,7 @@ class PeersManager with Holepunch, PEX {
         piece?.pushSubPiece(subindex);
       }
     }
-    // 唤醒其他可能没有工作的peer
+    // Wake up other possibly idle peers.
     if (flag) {
       for (var p in _activePeers) {
         if (p != peer && p.isSleeping) {
@@ -756,6 +757,6 @@ class PeersManager with Holepunch, PEX {
   @override
   void holePunchRendezvous(CompactAddress ip) {
     // TODO: implement holePunchRendezvous
-    // print('收到 holePunch Rendezvous');
+    print('Received holePunch Rendezvous.');
   }
 }

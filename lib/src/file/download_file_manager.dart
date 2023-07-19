@@ -33,8 +33,7 @@ class DownloadFileManager {
 
   final StateFile _stateFile;
 
-  /// TODO
-  /// - 没有建立文件读取缓存
+  /// TODO: File read caching
   DownloadFileManager(this.metainfo, this._stateFile) {
     _piece2fileMap = List.filled(_stateFile.bitfield.piecesNum, null);
   }
@@ -100,9 +99,11 @@ class DownloadFileManager {
 
   int get downloaded => _stateFile.downloaded;
 
-  /// 该方法看似只将缓冲区内容写入磁盘，实际上
-  /// 每当缓存写入后都会认为该[pieceIndex]对应`Piece`已经完成，则会去移除
-  /// `_file2pieceMap`中文件对应的piece index，当全部移除完毕，会抛出File Complete事件
+  /// This method appears to only write the buffer content to the disk, but in
+  /// reality,every time the cache is written, it is considered that the [Piece]
+  /// corresponding to [pieceIndex] has been completed. Therefore, it will
+  /// remove the file's corresponding piece index from the _file2pieceMap. When
+  /// all the pieces have been removed, a File Complete event will be triggered.
   Future<bool> flushFiles(Set<int> pieceIndices) async {
     var d = _stateFile.downloaded;
     var flushed = <String>{};
@@ -126,7 +127,7 @@ class DownloadFileManager {
     }
 
     var msg =
-        'downloaded：${d / (1024 * 1024)} mb , 完成度 ${((d / metainfo.length) * 10000).toInt() / 100} %';
+        'downloaded：${d / (1024 * 1024)} mb , Progress ${((d / metainfo.length) * 10000).toInt() / 100} %';
     log(msg, name: runtimeType.toString());
     return true;
   }
@@ -219,11 +220,11 @@ class DownloadFileManager {
   }
 
   ///
-  /// 将`Sub Piece`的内容写入文件中。完成后会发送 `sub piece complete`事件，
-  /// 如果失败，就会发送`sub piece failed`事件
+  // Writes the content of a Sub Piece to the file. After completion, a sub piece complete event will be sent.
+  /// If it fails, a sub piece failed event will be sent.
   ///
-  /// 该`Sub Piece`是来自于[pieceIndex]对应的`Piece`，内容为[block],起始位置是[begin]。
-  /// 该类不会去验证写入的Sub Piece是否重复，重复内容直接覆盖之前内容
+  /// The Sub Piece is from the Piece corresponding to [pieceIndex], and the content is [block] starting from [begin].
+  /// This class does not validate if the written Sub Piece is a duplicate; it simply overwrites the previous content.
   void writeFile(int pieceIndex, int begin, List<int> block) {
     var tempFiles = _piece2fileMap?[pieceIndex];
     var ps = pieceIndex * metainfo.pieceLength + begin;

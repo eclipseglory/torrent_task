@@ -93,12 +93,12 @@ abstract class TorrentTask {
 
   bool offResume(void Function() handler);
 
-  /// 增加DHT node，一般是将torrent文件中的nodes加入进去。
+  /// Adding a DHT node usually involves adding the nodes from the torrent file into the DHT network.
   ///
-  /// 当然也可以直接添加已知的node地址
+  /// Alternatively, you can directly add known node addresses.
   void addDHTNode(Uri uri);
 
-  /// 添加已知的Peer地址
+  /// Add known Peer addresses.
   void addPeer(CompactAddress address,
       [PeerType type = PeerType.TCP, Socket socket]);
 }
@@ -137,7 +137,8 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   final Set<String> _peerIds = {};
 
-  late String _peerId; // 这个是生成的本地peer的id，和Peer类的id是两回事
+  late String
+      _peerId; // This is the generated local peer ID, which is different from the ID used in the Peer class.
 
   ServerSocket? _serverSocket;
 
@@ -231,7 +232,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   void _processLSDPeerEvent(CompactAddress address, String infoHash) {
-    print('居然有LSD！！');
+    print('There is LSD! !');
   }
 
   void _processNewPeerFound(CompactAddress url) {
@@ -281,7 +282,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   @override
   Future start() async {
-    // 进入的peer：
+    // Incoming peer:
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
     await _init(_metaInfo, _savePath);
     _serverSocket?.listen(_hookInPeer);
@@ -297,7 +298,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     map['downloaded'] = _stateFile!.downloaded;
     map['uploaded'] = _stateFile!.uploaded;
     map['total_length'] = _metaInfo.length;
-    // 主动访问的peer:
+    // Outgoing peer:
     _tracker?.onPeerEvent(_processTrackerPeerEvent);
     _peersManager?.onAllComplete(_whenTaskDownloadComplete);
     _fileManager?.onFileComplete(_whenFileDownloadComplete);
@@ -344,7 +345,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _tracker?.offPeerEvent(_processTrackerPeerEvent);
     _peersManager?.offAllComplete(_whenTaskDownloadComplete);
     _fileManager?.offFileComplete(_whenFileDownloadComplete);
-    // 这是有顺序的,先停止tracker运行,然后停止监听serversocket以及所有的peer,最后关闭文件系统
+    // This is in order, first stop the tracker, then stop listening on the server socket and all peers, finally close the file system.
     await _tracker?.dispose();
     _tracker = null;
     await _peersManager?.dispose();

@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-/// 用来于的基础数字，靠右移动获取要`&`和`|`的数
+/// The base number used for bitwise AND and OR operations.
 ///
-/// 即：10000000
+/// It is represented as: 10000000 (binary representation)
 const BASE_NUM = 128;
 
 class Bitfield {
@@ -14,19 +14,22 @@ class Bitfield {
 
   bool getBit(int index) {
     if (index < 0 || index >= piecesNum) return false;
-    var i = index ~/ 8; // 表示第几个数字
-    var b = index.remainder(8); // 这表示该数字的第几位bit
+    var i = index ~/ 8; // This represents the position of the byte.
+    var b = index
+        .remainder(8); // This represents the position of the bit in the byte
     var andNum = BASE_NUM >> b;
-    return ((andNum & buffer[i]) != 0); // 等于0说明该位上的数字为0，即false
+    return ((andNum & buffer[i]) !=
+        0); // If it is equal to 0, it means that the bit at that position is 0, which is equivalent to false.
   }
 
   ///
-  /// [index] 如果不在 [0 - piecesNum]范围内，不会报错，直接返回
+  /// If [index] is not within the range [0 - piecesNum], no error will be thrown, and the method will return directly.
   void setBit(int index, bool bit) {
     if (index < 0 || index >= piecesNum) return;
     if (getBit(index) == bit) return;
-    var i = index ~/ 8; // 表示第几个数字
-    var b = index.remainder(8); // 这表示该数字的第几位bit
+    var i = index ~/ 8; // This represents the position of the byte.
+    var b = index
+        .remainder(8); // This represents the position of the bit in the byte
     var orNum = BASE_NUM >> b;
     if (bit) {
       _completedIndex = completedPieces;
@@ -38,7 +41,7 @@ class Bitfield {
     }
   }
 
-  /// 如果有完成的piece就返回ture，不一定会全部检索
+  /// Returns `true` if there is a completed piece, without necessarily checking all of them.
   bool haveCompletePiece() {
     for (var i = 0; i < buffer.length; i++) {
       var a = buffer[i];

@@ -189,7 +189,8 @@ class StateFile {
       await _access?.flush();
       await _access?.close();
     } catch (e) {
-      log('关闭状态文件出错：', error: e, name: runtimeType.toString());
+      log('Error while closing the status file: ',
+          error: e, name: runtimeType.toString());
     } finally {
       _access = null;
       _ss = null;

@@ -12,7 +12,7 @@ import 'package:torrent_task/torrent_task.dart';
 void main() {
   group('Bitfield test - ', () {
     Bitfield? bitfield;
-    var pieces = 123; // 不要给8的倍数
+    var pieces = 123; // Do not provide a number that is multiple of 8
     setUp(() {
       bitfield = Bitfield.createEmptyBitfield(pieces);
     });
@@ -28,7 +28,7 @@ void main() {
     });
 
     test('random set/get test, and check the complete index ', () {
-      var t = Random(); //放大范围
+      var t = Random(); // Increase the range.
       var randomIndex = <int>{};
       for (var i = 0; i < pieces; i++) {
         var index = t.nextInt(pieces * 2);
@@ -70,7 +70,7 @@ void main() {
     });
 
     test('add/remote complete list', () {
-      var t = Random(); //放大范围
+      var t = Random(); //Increase the range.
       var randomIndex = <int>{};
       for (var i = 0; i < pieces; i++) {
         var index = t.nextInt(pieces * 2);
@@ -101,7 +101,7 @@ void main() {
 
   group('Piece test - ', () {
     test('create sub-pieces', () async {
-      // 能整除的
+      // Simulate bitfields that are divisible.
       var totalsize = 163840;
       var remain = Random().nextInt(100);
       totalsize = totalsize + remain;
@@ -128,9 +128,9 @@ void main() {
   });
 
   group('test same piece find - ', () {
-    var pieces = 123; // 不要给8的倍数
+    var pieces = 123; // Do not provide a number that is multiple of 8
     List<Bitfield> bitfieldList = [];
-    // 模拟多个peer的bitfield：
+    // Simulate bitfields of multiple peers.
     setUp(() {
       bitfieldList =
           List.generate(10, (index) => Bitfield.createEmptyBitfield(pieces));
@@ -180,7 +180,7 @@ void main() {
       assert(!stateFile.bitfield.haveCompletePiece());
 
       await stateFile.close();
-      // 测试建立空文件后读取内容
+      // To test reading the contents of an empty file after creating it.
       stateFile = await StateFile.getStateFile(directory, torrent!);
       b = torrent!.pieces.length ~/ 8;
       if (b * 8 != torrent!.pieces.length) b++;
@@ -206,7 +206,7 @@ void main() {
       assert(stateFile.uploaded == 987654321);
 
       await stateFile.close();
-      await stateFile.close(); //关闭两次会怎样？
+      await stateFile.close(); // What will happen if closed twice?
       var f = File(
           '$directory${Platform.pathSeparator}${torrent!.infoHash}.bt.state');
       var locker = Completer();
@@ -248,7 +248,7 @@ void main() {
           '$directory${Platform.pathSeparator}${torrent!.infoHash}.bt.state');
       assert(await t.exists());
       await stateFile.delete();
-      await stateFile.delete(); //删除两次
+      await stateFile.delete(); //Deleting twice.
       assert(!await t.exists());
     });
   });
@@ -261,9 +261,9 @@ void main() {
       assert(await file.requestWrite(0, buffer, 0, buffer.length));
       var bytes = await file.requestRead(0, buffer.length);
       var result = String.fromCharCodes(bytes);
-      assert(result == content, '验证读取内容错误');
+      assert(result == content, 'Validating reading content error.');
       await file.close();
-      await file.close(); // 关闭两次
+      await file.close(); // Closing twice.
       var file1 = File('test/test.txt');
       assert(await file1.exists());
       var b = <int>[];
@@ -272,13 +272,13 @@ void main() {
         b.addAll(data);
       }, onDone: () {
         var result = String.fromCharCodes(b);
-        assert(result == content, '验证文件内容错误');
+        assert(result == content, 'File content verification error.');
         lock.complete();
       });
       await lock.future;
       await file.delete();
       file1 = File('test/test.txt');
-      assert(!await file1.exists(), '文件删除错误');
+      assert(!await file1.exists(), 'File deletion error.');
     });
   });
 }

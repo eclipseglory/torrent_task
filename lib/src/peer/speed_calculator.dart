@@ -3,11 +3,11 @@ import 'dart:math';
 /// 5 seconds
 const RECORD_TIME = 5000000;
 
-/// 上传下载速度计算器
+/// Upload and download speed calculator.
 mixin SpeedCalculator {
   final List<List<int>> _downloadedHistory = <List<int>>[];
 
-  /// 当前5秒内的平均下载速度
+  /// The average download speed within the last 5 seconds.
   double get currentDownloadSpeed {
     if (_downloadedHistory.isEmpty) return 0.0;
     var now = DateTime.now().microsecondsSinceEpoch;
@@ -30,21 +30,21 @@ mixin SpeedCalculator {
     return (d / 1024) / (passed / 1000000);
   }
 
-  /// 从Peer连接开始到当前的平均下载速度
+  /// The average download speed from the start of the Peer connection until the current moment.
   double get averageDownloadSpeed {
     var passed = livingTime;
     if (passed == null || passed == 0) return 0.0;
     return (_downloaded / 1024) / (passed / 1000000);
   }
 
-  /// 从Peer连接开始到当前的平均上传速度
+  /// The average upload speed from the start of the Peer connection until the current moment.
   double get averageUploadSpeed {
     var passed = livingTime;
     if (passed == null || passed == 0) return 0.0;
     return (_uploaded / 1024) / (passed / 1000000);
   }
 
-  /// 从连接开始，直到peer销毁之前所持续时间
+  /// The duration from the start of the connection until the peer is destroyed.
   int? get livingTime {
     if (_startTime == null) return null;
     var e = _endTime;
@@ -58,20 +58,21 @@ mixin SpeedCalculator {
 
   int _downloaded = 0;
 
-  /// 从远程下载的总数据量，单位bytes
+  /// The total amount of data downloaded from the remote, in bytes.
   int get downloaded => _downloaded;
 
   int _uploaded = 0;
 
-  /// 上传到远程的总数据量，单位bytes
+  /// The total amount of data uploaded to the remote, in bytes.
   int get uploaded => _uploaded;
 
-  /// 更新下载
+  /// Update the download.
   void updateDownload(List<List<int>> requests) {
     if (requests.isEmpty) return;
     var downloaded = 0;
     for (var request in requests) {
-      if (request[4] != 0) continue; // 重新计时的不算
+      if (request[4] != 0)
+        continue; // Do not count the time for re-calculation.
       downloaded += request[2];
     }
     _downloadedHistory.add([downloaded, DateTime.now().microsecondsSinceEpoch]);
@@ -82,12 +83,12 @@ mixin SpeedCalculator {
     _uploaded += uploaded;
   }
 
-  /// 速度计算开始计时
+  /// Start the speed calculation timer.
   void startSpeedCalculator() {
     _startTime = DateTime.now().microsecondsSinceEpoch;
   }
 
-  /// 速度计算停止计时
+  /// Stop the speed calculation timer.
   void stopSpeedCalculator() {
     _endTime = DateTime.now().microsecondsSinceEpoch;
     _downloadedHistory.clear();

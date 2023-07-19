@@ -75,11 +75,11 @@ class Piece {
   }
 
   ///
-  /// 子Piece下载完成。
+  /// SubPiece download completed.
   ///
-  /// 将子piece放入 `_writtingSubPieces` 队列中
-  /// 设置子Piece为完成状态。如果该子Piece已经设置过，返回`false`,没有设置
-  /// 过说明设置成功，返回`true`
+  /// Put the subpiece into the _writtingSubPieces queue and mark it as completed.
+  /// If the subpiece has already been marked, return false; if it hasn't been marked
+  /// yet, mark it as completed and return true.
   bool subPieceDownloadComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
     _subPiecesQueue.remove(subindex);
@@ -88,7 +88,7 @@ class Piece {
 
   bool subPieceWriteComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
-    // _subPiecesQueue.remove(subindex); // 有这可能？
+    // _subPiecesQueue.remove(subindex); // Is this possible?
     _writtingSubPieces.remove(subindex);
     var re = _downloadedSubPieces.add(subindex);
     if (isCompleted) {
@@ -98,9 +98,10 @@ class Piece {
   }
 
   ///
-  ///子Piece [subIndex]是否还在。
+  /// Whether the sub-piece [subIndex] is still available.
   ///
-  ///当子Piece被弹出栈用于下载，或者子Piece已经下载完成，那么就视为该Piece已经不再包含该子Piece
+  /// When a sub-piece is popped from the stack for download or if the sub-piece has already been downloaded,
+  /// the piece is considered to no longer contain that sub-piece.
   bool containsSubpiece(int subIndex) {
     return subPieceQueue.contains(subIndex);
   }

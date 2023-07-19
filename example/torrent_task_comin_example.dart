@@ -9,7 +9,7 @@ import 'package:torrent_task/torrent_task.dart';
 Future<void> main() async {
   var model =
       await Torrent.parse('example${Platform.pathSeparator}test4.torrent');
-  // 不获取peers
+  // No peers retrieval
   model.announces.clear();
   var task = TorrentTask.newTask(model, 'tmp${Platform.pathSeparator}test');
   Timer? timer;
@@ -51,7 +51,7 @@ Future<void> main() async {
   //   await Future.delayed(Duration(seconds: 120));
   //   task.resume();
   // });
-  // 自己下载自己
+  // download from yourself
   task.addPeer(CompactAddress(InternetAddress.tryParse('192.168.0.24')!, 57331),
       PeerType.UTP);
 }

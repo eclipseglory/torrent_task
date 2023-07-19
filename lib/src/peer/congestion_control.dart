@@ -10,14 +10,14 @@ const MAX_WINDOW = 1048576;
 
 const RECORD_TIME = 5000000;
 
-/// 最大每次增加的request为3
+/// The maximum number of requests to be increased in each round is 3.
 const MAX_CWND_INCREASE_REQUESTS_PER_RTT = 3 * 16384;
 
-/// LEDBAT拥塞控制
+/// LEDBAT Congestion Control
 ///
-/// 注意，所有时间单位都是微秒
+/// Note: All time units are in microseconds
 mixin CongestionControl {
-  // 初始是10秒
+  // The initial value is 10 seconds.
   double _rto = 10000000;
 
   double? _srtt;
@@ -45,7 +45,7 @@ mixin CongestionControl {
     return _handles.remove(handle);
   }
 
-  /// 更新超时时间
+  /// Update the timeout.
   void updateRTO(int rtt) {
     if (rtt == 0) return;
     if (_srtt == null) {
@@ -56,7 +56,7 @@ mixin CongestionControl {
       _srtt = (1 - 0.125) * _srtt! + 0.125 * rtt;
     }
     _rto = _srtt! + max(100000, 4 * _rttvar!);
-    // 不到1秒，就设置为1秒
+    // If less than 1 second, set it to 1 second.
     _rto = max(_rto, 1000000);
   }
 
@@ -110,7 +110,7 @@ mixin CongestionControl {
     var downloaded = 0;
     int? minRtt;
     for (var request in requests) {
-      // 重发后收到的不管
+      // Ignore the received packets after resending.
       if (request[4] != 0) continue;
       var now = DateTime.now().microsecondsSinceEpoch;
       var rtt = now - request[3];
