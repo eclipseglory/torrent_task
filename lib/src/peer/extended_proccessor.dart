@@ -61,6 +61,7 @@ mixin ExtendedProcessor {
   }
 
   void processExtendHandshake(dynamic data) {
+    if (data == null || !(data as Map).containsKey('m')) return;
     var m = data['m'] as Map;
     _rawMap = m;
     m.forEach((key, value) {

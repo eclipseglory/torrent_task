@@ -70,6 +70,8 @@ typedef BoolHandle = void Function(Peer peer, bool value);
 
 typedef SingleIntHandle = void Function(Peer peer, int value);
 
+enum PeerSource { tracker, dht, pex, lsd, incoming, manual, holepunch }
+
 abstract class Peer
     with
         PeerEventDispatcher,
@@ -165,6 +167,8 @@ abstract class Peer
 
   final PeerType type;
 
+  final PeerSource source;
+
   int reqq;
 
   int? remoteReqq;
@@ -182,6 +186,7 @@ abstract class Peer
   /// [localEnableExtended] indicates whether local peers can use the
   /// [Extension Protocol](http://www.bittorrent.org/beps/bep_0010.html).
   Peer(this._localPeerId, this.address, this._infoHashBuffer, this._piecesNum,
+      this.source,
       {this.type = PeerType.TCP,
       this.localEnableFastPeer = true,
       this.localEnableExtended = true,
@@ -189,17 +194,31 @@ abstract class Peer
     _remoteBitfield = Bitfield.createEmptyBitfield(_piecesNum);
   }
 
-  factory Peer.newTCPPeer(String localPeerId, CompactAddress address,
-      List<int> infoHashBuffer, int piecesNum, Socket? socket,
-      {bool enableExtend = true, bool enableFast = true}) {
-    return _TCPPeer(localPeerId, address, infoHashBuffer, piecesNum, socket,
+  factory Peer.newTCPPeer(
+      String localPeerId,
+      CompactAddress address,
+      List<int> infoHashBuffer,
+      int piecesNum,
+      Socket? socket,
+      PeerSource source,
+      {bool enableExtend = true,
+      bool enableFast = true}) {
+    return _TCPPeer(
+        localPeerId, address, infoHashBuffer, piecesNum, socket, source,
         enableExtend: enableExtend, enableFast: enableFast);
   }
 
-  factory Peer.newUTPPeer(String localPeerId, CompactAddress address,
-      List<int> infoHashBuffer, int piecesNum, UTPSocket? socket,
-      {bool enableExtend = true, bool enableFast = true}) {
-    return _UTPPeer(localPeerId, address, infoHashBuffer, piecesNum, socket,
+  factory Peer.newUTPPeer(
+      String localPeerId,
+      CompactAddress address,
+      List<int> infoHashBuffer,
+      int piecesNum,
+      UTPSocket? socket,
+      PeerSource source,
+      {bool enableExtend = true,
+      bool enableFast = true}) {
+    return _UTPPeer(
+        localPeerId, address, infoHashBuffer, piecesNum, socket, source,
         enableExtend: enableExtend, enableFast: enableFast);
   }
 
@@ -704,7 +723,7 @@ abstract class Peer
       List.copyRange(block, 0, message, 8);
       requests.add(request);
       _log(
-          'Received request for Piece ($index, $begin) content, downloaded $downloaded bytes from the current Peer.');
+          'Received request for Piece ($index, $begin) content, downloaded $downloaded bytes from the current Peer $type $address');
       firePiece(index, begin, block);
     }
     messages.clear();
@@ -1159,10 +1178,15 @@ abstract class Peer
 
   void _log(String message, [dynamic error]) {
     if (error != null) {
-      // dev.log(message, error: error, name: runtimeType.toString());
+      dev.log(message, error: error, name: runtimeType.toString());
     } else {
-      // log(message, name: runtimeType.toString());
+      dev.log(message, name: runtimeType.toString());
     }
+  }
+
+  @override
+  String toString() {
+    return '$type:$id $address $source';
   }
 
   @override
@@ -1194,9 +1218,9 @@ class TCPConnectException implements Exception {
 class _TCPPeer extends Peer {
   Socket? _socket;
   _TCPPeer(String localPeerId, CompactAddress address, List<int> infoHashBuffer,
-      int piecesNum, this._socket,
+      int piecesNum, this._socket, PeerSource source,
       {bool enableExtend = true, bool enableFast = true})
-      : super(localPeerId, address, infoHashBuffer, piecesNum,
+      : super(localPeerId, address, infoHashBuffer, piecesNum, source,
             type: PeerType.TCP,
             localEnableExtended: enableExtend,
             localEnableFastPeer: enableFast);
@@ -1243,10 +1267,16 @@ class _TCPPeer extends Peer {
 class _UTPPeer extends Peer {
   UTPSocketClient? _client;
   UTPSocket? _socket;
-  _UTPPeer(String localPeerId, CompactAddress address, List<int> infoHashBuffer,
-      int piecesNum, this._socket,
-      {bool enableExtend = true, bool enableFast = true})
-      : super(localPeerId, address, infoHashBuffer, piecesNum,
+  _UTPPeer(
+    String localPeerId,
+    CompactAddress address,
+    List<int> infoHashBuffer,
+    int piecesNum,
+    this._socket,
+    PeerSource source, {
+    bool enableExtend = true,
+    bool enableFast = true,
+  }) : super(localPeerId, address, infoHashBuffer, piecesNum, source,
             type: PeerType.UTP,
             localEnableExtended: enableExtend,
             localEnableFastPeer: enableFast);

@@ -99,7 +99,7 @@ abstract class TorrentTask {
   void addDHTNode(Uri uri);
 
   /// Add known Peer addresses.
-  void addPeer(CompactAddress address,
+  void addPeer(CompactAddress address, PeerSource source,
       [PeerType type = PeerType.TCP, Socket socket]);
 }
 
@@ -205,9 +205,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
   }
 
   @override
-  void addPeer(CompactAddress address,
+  void addPeer(CompactAddress address, PeerSource source,
       [PeerType type = PeerType.TCP, Socket? socket]) {
-    _peersManager?.addNewPeerAddress(address, type, socket);
+    _peersManager?.addNewPeerAddress(address, source, type, socket);
   }
 
   void _whenTaskDownloadComplete() async {
@@ -226,7 +226,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     var ps = event.peers;
     if (ps.isNotEmpty) {
       for (var url in ps) {
-        _processNewPeerFound(url);
+        _processNewPeerFound(url, PeerSource.tracker);
       }
     }
   }
@@ -235,13 +235,17 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     print('There is LSD! !');
   }
 
-  void _processNewPeerFound(CompactAddress url) {
-    _peersManager?.addNewPeerAddress(url);
+  void _processNewPeerFound(CompactAddress url, PeerSource source) {
+    log("Add new dht peer ${url.toString()} to peersManager",
+        name: runtimeType.toString());
+    _peersManager?.addNewPeerAddress(url, source);
   }
 
   void _processDHTPeer(CompactAddress peer, String infoHash) {
+    log("Got new peer from $peer DHT for infohash: ${Uint8List.fromList(infoHash.codeUnits).toHexString()}",
+        name: runtimeType.toString());
     if (infoHash == _infoHashString) {
-      _processNewPeerFound(peer);
+      _processNewPeerFound(peer, PeerSource.dht);
     }
   }
 
@@ -257,7 +261,10 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     log('incoming connect: ${socket.remoteAddress.address}:${socket.remotePort}',
         name: runtimeType.toString());
     _peersManager?.addNewPeerAddress(
-        CompactAddress(socket.address, socket.port), PeerType.TCP, socket);
+        CompactAddress(socket.address, socket.port),
+        PeerSource.incoming,
+        PeerType.TCP,
+        socket);
   }
 
   @override

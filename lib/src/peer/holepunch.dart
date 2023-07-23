@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -43,6 +44,7 @@ mixin Holepunch {
   ///
   /// err_code (4 bytes): <error code as a big-endian 4-byte integer; 0 in non-error messages>
   void parseHolepuchMessage(List<int> data) {
+    log('Parsing holepunch message', name: runtimeType.toString());
     var type = data[0];
     var iptype = data[1];
     var offset = 0;

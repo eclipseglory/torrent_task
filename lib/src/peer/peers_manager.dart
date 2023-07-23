@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer';
 import 'dart:io';
 
 import 'package:torrent_model/torrent_model.dart';
@@ -193,6 +194,8 @@ class PeersManager with Holepunch, PEX {
 
   ///  Add supported extensions here
   void _registerExtended(Peer peer) {
+    log('registering extensions for peer ${peer.address}',
+        name: runtimeType.toString());
     peer.registerExtened('ut_pex');
     peer.registerExtened('ut_holepunch');
   }
@@ -220,6 +223,7 @@ class PeersManager with Holepunch, PEX {
   }
 
   void _processExtendedMessage(dynamic source, String name, dynamic data) {
+    log('Processing Extended Message $name', name: runtimeType.toString());
     if (name == 'ut_holepunch') {
       parseHolepuchMessage(data);
     }
@@ -247,7 +251,7 @@ class PeersManager with Holepunch, PEX {
   ///
   /// Usually [socket] is null , unless this peer was incoming connection, but
   /// this type peer was managed by [TorrentTask] , user don't need to know that.
-  void addNewPeerAddress(CompactAddress? address,
+  void addNewPeerAddress(CompactAddress? address, PeerSource source,
       [PeerType type = PeerType.TCP, dynamic socket]) {
     if (address == null) return;
     if (address.address == localExtenelIP) return;
@@ -261,11 +265,11 @@ class PeersManager with Holepunch, PEX {
       Peer? peer;
       if (type == PeerType.TCP) {
         peer = Peer.newTCPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
-            _metaInfo.pieces.length, socket);
+            _metaInfo.pieces.length, socket, source);
       }
       if (type == PeerType.UTP) {
         peer = Peer.newUTPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
-            _metaInfo.pieces.length, socket);
+            _metaInfo.pieces.length, socket, source);
       }
       if (peer != null) _hookPeer(peer);
     }
@@ -418,11 +422,15 @@ class PeersManager with Holepunch, PEX {
 
     if (reconnect) {
       if (_activePeers.length < MAX_ACTIVE_PEERS && !isDisposed) {
-        addNewPeerAddress(peer.address, peer.type);
+        addNewPeerAddress(
+          peer.address,
+          peer.source,
+          peer.type,
+        );
       }
     } else {
       if (peer.isSeeder && !_fileManager.isAllComplete && !isDisposed) {
-        addNewPeerAddress(peer.address, peer.type);
+        addNewPeerAddress(peer.address, peer.source, peer.type);
       }
     }
   }
@@ -711,7 +719,7 @@ class PeersManager with Holepunch, PEX {
       peer.sendExtendMessage('ut_holepunch', message);
       return;
     }
-    addNewPeerAddress(address);
+    addNewPeerAddress(address, PeerSource.pex);
   }
 
   @override
@@ -719,7 +727,8 @@ class PeersManager with Holepunch, PEX {
 
   @override
   void holePunchConnect(CompactAddress ip) {
-    addNewPeerAddress(ip, PeerType.UTP);
+    log("holePunch connect $ip");
+    addNewPeerAddress(ip, PeerSource.holepunch, PeerType.UTP);
   }
 
   int get utpPeerCount {
@@ -751,12 +760,12 @@ class PeersManager with Holepunch, PEX {
 
   @override
   void holePunchError(String err, CompactAddress ip) {
-    // print('holepunch error - $err');
+    log('holepunch error - $err');
   }
 
   @override
   void holePunchRendezvous(CompactAddress ip) {
     // TODO: implement holePunchRendezvous
-    print('Received holePunch Rendezvous.');
+    log('Received holePunch Rendezvous from $ip');
   }
 }

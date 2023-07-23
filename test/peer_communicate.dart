@@ -42,7 +42,8 @@ void main() async {
         CompactAddress(socket.address, socket.port),
         infoBuffer,
         piecesNum,
-        socket);
+        socket,
+        PeerSource.incoming);
     peer.onConnect((peer) {
       callMap['connect1'] = true;
       peer.sendHandShake();
@@ -143,7 +144,8 @@ void main() async {
       CompactAddress(InternetAddress.tryParse('127.0.0.1')!, serverPort),
       infoBuffer,
       piecesNum,
-      null);
+      null,
+      PeerSource.manual);
   peer.onConnect((peer) {
     callMap['connect2'] = true;
     print('connect server success');
