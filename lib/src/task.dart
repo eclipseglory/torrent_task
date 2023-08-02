@@ -100,7 +100,7 @@ abstract class TorrentTask {
 
   /// Add known Peer addresses.
   void addPeer(CompactAddress address, PeerSource source,
-      [PeerType type = PeerType.TCP, Socket socket]);
+      {PeerType? type, Socket socket});
 }
 
 class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
@@ -206,8 +206,9 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
 
   @override
   void addPeer(CompactAddress address, PeerSource source,
-      [PeerType type = PeerType.TCP, Socket? socket]) {
-    _peersManager?.addNewPeerAddress(address, source, type, socket);
+      {PeerType? type, Socket? socket}) {
+    _peersManager?.addNewPeerAddress(address, source,
+        type: type, socket: socket);
   }
 
   void _whenTaskDownloadComplete() async {
@@ -263,8 +264,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _peersManager?.addNewPeerAddress(
         CompactAddress(socket.remoteAddress, socket.remotePort),
         PeerSource.incoming,
-        PeerType.TCP,
-        socket);
+        socket: socket);
   }
 
   @override

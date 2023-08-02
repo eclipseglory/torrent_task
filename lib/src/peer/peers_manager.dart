@@ -257,8 +257,9 @@ class PeersManager with Holepunch, PEX {
   /// Usually [socket] is null , unless this peer was incoming connection, but
   /// this type peer was managed by [TorrentTask] , user don't need to know that.
   void addNewPeerAddress(CompactAddress? address, PeerSource source,
-      [PeerType type = PeerType.TCP, dynamic socket]) {
+      {PeerType? type, dynamic socket}) {
     if (address == null) return;
+    if (IGNORE_IPS.contains(address.address)) return;
     if (address.address == localExternalIP) return;
     if (socket != null) {
       // Indicates that it is an actively connected peer, and currently, only one IP address is allowed to connect at a time.
@@ -268,11 +269,11 @@ class PeersManager with Holepunch, PEX {
     }
     if (_peersAddress.add(address)) {
       Peer? peer;
-      if (type == PeerType.TCP) {
+      if (type == null || type == PeerType.TCP) {
         peer = Peer.newTCPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
             _metaInfo.pieces.length, socket, source);
       }
-      if (type == PeerType.UTP) {
+      if (type == null || type == PeerType.UTP) {
         peer = Peer.newUTPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
             _metaInfo.pieces.length, socket, source);
       }
@@ -430,12 +431,12 @@ class PeersManager with Holepunch, PEX {
         addNewPeerAddress(
           peer.address,
           peer.source,
-          peer.type,
+          type: peer.type,
         );
       }
     } else {
       if (peer.isSeeder && !_fileManager.isAllComplete && !isDisposed) {
-        addNewPeerAddress(peer.address, peer.source, peer.type);
+        addNewPeerAddress(peer.address, peer.source, type: peer.type);
       }
     }
   }
@@ -733,7 +734,7 @@ class PeersManager with Holepunch, PEX {
   @override
   void holePunchConnect(CompactAddress ip) {
     log("holePunch connect $ip");
-    addNewPeerAddress(ip, PeerSource.holepunch, PeerType.UTP);
+    addNewPeerAddress(ip, PeerSource.holepunch, type: PeerType.UTP);
   }
 
   int get utpPeerCount {

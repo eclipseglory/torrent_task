@@ -53,5 +53,5 @@ Future<void> main() async {
   // });
   // download from yourself
   task.addPeer(CompactAddress(InternetAddress.tryParse('192.168.0.24')!, 57331),
-      PeerSource.manual, PeerType.UTP);
+      PeerSource.manual);
 }
