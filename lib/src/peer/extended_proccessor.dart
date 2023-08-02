@@ -64,7 +64,7 @@ mixin ExtendedProcessor {
     if (data == null || !(data as Map<String, dynamic>).containsKey('m')) {
       return;
     }
-    var m = data['m'] as Map<String, int>;
+    var m = data['m'] as Map<String, dynamic>;
     _rawMap = m;
     m.forEach((key, value) {
       if (value == 0) return;
