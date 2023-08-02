@@ -1186,7 +1186,7 @@ abstract class Peer
 
   @override
   String toString() {
-    return '$type:$id $address $source';
+    return '$type:${_remotePeerId?.codeUnits != null ? Uint8List.fromList(_remotePeerId!.codeUnits).toHexString() : ''} $address $source';
   }
 
   @override
