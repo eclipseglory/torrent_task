@@ -33,6 +33,10 @@ class MetadataDownloader
 
   int? get metaDataSize => _metaDataSize;
 
+  num get progress => _metaDataBlockNum != null
+      ? _completedPieces.length / _metaDataBlockNum! * 100
+      : 0;
+
   late String _localPeerId;
 
   late List<int> _infoHashBuffer;
