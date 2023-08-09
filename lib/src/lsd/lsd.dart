@@ -37,7 +37,8 @@ class LSD {
   Timer? _timer;
 
   Future<void> start() async {
-    _socket ??= await RawDatagramSocket.bind(InternetAddress.anyIPv4, LSD_PORT);
+    _socket ??= await RawDatagramSocket.bind(InternetAddress.anyIPv4, LSD_PORT,
+        reusePort: true);
     _socket?.listen((event) {
       if (event == RawSocketEvent.read) {
         var datagram = _socket?.receive();
