@@ -7,6 +7,7 @@ import 'package:torrent_model/torrent_model.dart';
 import 'package:torrent_tracker/torrent_tracker.dart';
 import 'package:dartorrent_common/dartorrent_common.dart';
 import 'package:dht_dart/dht_dart.dart';
+import 'package:utp/utp.dart';
 
 import 'file/download_file_manager.dart';
 import 'file/state_file.dart';
@@ -141,6 +142,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
       _peerId; // This is the generated local peer ID, which is different from the ID used in the Peer class.
 
   ServerSocket? _serverSocket;
+  ServerUTPSocket? _utpServer;
 
   final Set<InternetAddress> _cominIp = {};
 
@@ -250,6 +252,24 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     }
   }
 
+  void _hookUTP(UTPSocket socket) {
+    if (socket.remoteAddress == LOCAL_ADDRESS) {
+      socket.close();
+      return;
+    }
+    if (_cominIp.length >= MAX_IN_PEERS || !_cominIp.add(socket.address)) {
+      socket.close();
+      return;
+    }
+    log('incoming connect: ${socket.remoteAddress.address}:${socket.remotePort}',
+        name: runtimeType.toString());
+    _peersManager?.addNewPeerAddress(
+        CompactAddress(socket.remoteAddress, socket.remotePort),
+        PeerSource.incoming,
+        type: PeerType.UTP,
+        socket: socket);
+  }
+
   void _hookInPeer(Socket socket) {
     if (socket.remoteAddress == LOCAL_ADDRESS) {
       socket.close();
@@ -264,6 +284,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _peersManager?.addNewPeerAddress(
         CompactAddress(socket.remoteAddress, socket.remotePort),
         PeerSource.incoming,
+        type: PeerType.TCP,
         socket: socket);
   }
 
@@ -293,9 +314,10 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _serverSocket ??= await ServerSocket.bind(InternetAddress.anyIPv4, 0);
     await _init(_metaInfo, _savePath);
     _serverSocket?.listen(_hookInPeer);
-    // _utpServer ??= await ServerUTPSocket.bind(InternetAddress.anyIPv4, 0);
-    // _utpServer.listen(_hookUTP);
-    // print(_utpServer.port);
+    _utpServer ??= await ServerUTPSocket.bind(
+        InternetAddress.anyIPv4, _serverSocket?.port ?? 0);
+    _utpServer?.listen(_hookUTP);
+    print(_utpServer?.port);
 
     var map = {};
     map['name'] = _metaInfo.name;
@@ -311,7 +333,7 @@ class _TorrentTask implements TorrentTask, AnnounceOptionsProvider {
     _fileManager?.onFileComplete(_whenFileDownloadComplete);
 
     _lsd?.onLSDPeer(_processLSDPeerEvent);
-    _lsd?.port = _serverSocket?.port;
+    _lsd?.port = _utpServer?.port;
     _lsd?.start();
 
     _dht?.announce(
