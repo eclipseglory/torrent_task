@@ -4,10 +4,10 @@ import 'dart:developer' as dev;
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:bencode_dart/bencode_dart.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/torrent_task.dart';
-import 'package:utp/utp.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
+import 'package:utp_protocol/utp_protocol.dart';
 
 import 'peer_event_dispatcher.dart';
 import 'congestion_control.dart';

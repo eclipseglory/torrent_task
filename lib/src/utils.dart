@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/torrent_task.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
 
 String generatePeerId([String prefix = ID_PREFIX]) {
   var r = randomBytes(9);

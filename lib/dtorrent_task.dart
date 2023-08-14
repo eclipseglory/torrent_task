@@ -1,4 +1,4 @@
-library torrent_task;
+library dtorrent_task;
 
 import 'dart:io';
 

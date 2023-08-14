@@ -1,8 +1,8 @@
 import 'dart:io';
 
-import 'package:torrent_model/torrent_model.dart';
-import 'package:torrent_task/src/lsd/lsd.dart';
-import 'package:torrent_task/torrent_task.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
+import 'package:dtorrent_task/src/lsd/lsd.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
 
 void main(List<String> args) async {
   print(await getTorrenTaskVersion());

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:torrent_model/torrent_model.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
 import '../peer/bitfield.dart';
 
 const BITFIELD_TYPE = 'bitfield';

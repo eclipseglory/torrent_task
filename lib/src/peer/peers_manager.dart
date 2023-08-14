@@ -3,8 +3,8 @@ import 'dart:developer';
 import 'dart:io';
 
 import 'package:dart_ipify/dart_ipify.dart';
-import 'package:torrent_model/torrent_model.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
 
 import 'bitfield.dart';
 import 'peer.dart';

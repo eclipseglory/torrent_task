@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:torrent_model/torrent_model.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
 import '../peer/bitfield.dart';
 import 'piece.dart';
 import 'piece_provider.dart';

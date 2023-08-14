@@ -3,11 +3,11 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:bencode_dart/bencode_dart.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
 import 'package:dart_ipify/dart_ipify.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:dht_dart/dht_dart.dart';
-import 'package:torrent_tracker/torrent_tracker.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:bittorrent_dht/bittorrent_dht.dart';
+import 'package:dtorrent_tracker/dtorrent_tracker.dart';
 
 import '../peer/peer.dart';
 import '../peer/holepunch.dart';

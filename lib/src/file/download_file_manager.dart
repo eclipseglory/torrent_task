@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 
-import 'package:torrent_model/torrent_model.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
 import '../peer/peer_base.dart';
 
 import 'download_file.dart';

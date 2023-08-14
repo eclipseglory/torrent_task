@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:bencode_dart/bencode_dart.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
 
 mixin ExtendedProcessor {
   final Map<int, String> _extendedEventMap = {};

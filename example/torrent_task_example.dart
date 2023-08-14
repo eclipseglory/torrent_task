@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_model/torrent_model.dart';
-import 'package:torrent_task/torrent_task.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
 
 void main() async {
   try {

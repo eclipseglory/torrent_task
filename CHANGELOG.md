@@ -32,3 +32,6 @@
 
 ## 0.3.0
 - Add Send Metadata extension (BEP0009)
+
+## 0.3.1
+- nullsafety

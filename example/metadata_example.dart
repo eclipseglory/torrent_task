@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:bencode_dart/bencode_dart.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_model/torrent_model.dart';
-import 'package:torrent_task/src/metadata/metadata_downloader.dart';
-import 'package:torrent_task/torrent_task.dart';
-import 'package:torrent_tracker/torrent_tracker.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
+import 'package:dtorrent_task/src/metadata/metadata_downloader.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
+import 'package:dtorrent_tracker/dtorrent_tracker.dart';
 
 void main(List<String> args) async {
   var infohashString = '217bddb5816f2abc56ce1d9fe430711542b109cc';

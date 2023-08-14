@@ -3,11 +3,11 @@ import 'dart:developer';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:torrent_model/torrent_model.dart';
-import 'package:torrent_tracker/torrent_tracker.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:dht_dart/dht_dart.dart';
-import 'package:utp/utp.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
+import 'package:dtorrent_tracker/dtorrent_tracker.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:bittorrent_dht/bittorrent_dht.dart';
+import 'package:utp_protocol/utp_protocol.dart';
 
 import 'file/download_file_manager.dart';
 import 'file/state_file.dart';

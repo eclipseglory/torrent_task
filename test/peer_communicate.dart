@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/torrent_task.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
 
 void main() async {
   ServerSocket? serverSocket;
