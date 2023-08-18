@@ -1,18 +1,16 @@
 import 'piece.dart';
 import 'piece_provider.dart';
 
-/// Piece选择器。
+/// Piece selector.
 ///
-/// 当客户端开始下载前，通过这个类选择出恰当的Piece来下载
+/// When the client starts downloading, this class selects appropriate Pieces to download.
 abstract class PieceSelector {
-  /// 选择恰当的Piece应该Peer下载.
+  /// Selects the appropriate Piece for the Peer to download.
   ///
-  /// [remotePeerId]是即将下载的`Peer`的标识，这个标识并**不一定**是协议中的`peer_id`，
-  /// 而是`Piece`类中区分`Peer`的标识。
-  /// 该方法通过[provider]以及[piecesIndexList]获取对应的`Piece`对象，并在[piecesIndexList]
-  /// 集合中进行筛选。
+  /// [remotePeerId] is the identifier of the Peer that is about to download. This identifier may not necessarily be the peer_id in the protocol, but rather a unique identifier used by the Piece class to distinguish Peers.
+  /// This method retrieves the corresponding Piece object using [provider] and [piecesIndexList], and filters it within the [piecesIndexList] collection.
   ///
-  Piece selectPiece(
+  Piece? selectPiece(
       String remotePeerId, List<int> piecesIndexList, PieceProvider provider,
       [bool first = false]);
 }

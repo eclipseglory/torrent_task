@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:developer';
+import 'dart:io';
 
-import 'package:torrent_model/torrent_model.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
 import '../peer/peer_base.dart';
 
 import 'download_file.dart';
@@ -18,9 +19,9 @@ class DownloadFileManager {
 
   final Set<DownloadFile> _files = {};
 
-  List<List<DownloadFile>> _piece2fileMap;
+  List<List<DownloadFile>?>? _piece2fileMap;
 
-  final Map<String, List<int>> _file2pieceMap = {};
+  final Map<String, List<int>?> _file2pieceMap = {};
 
   final List<SubPieceCompleteHandle> _subPieceCompleteHandles = [];
 
@@ -32,10 +33,9 @@ class DownloadFileManager {
 
   final StateFile _stateFile;
 
-  /// TODO
-  /// - 没有建立文件读取缓存
+  /// TODO: File read caching
   DownloadFileManager(this.metainfo, this._stateFile) {
-    _piece2fileMap = List(_stateFile.bitfield.piecesNum);
+    _piece2fileMap = List.filled(_stateFile.bitfield.piecesNum, null);
   }
 
   static Future<DownloadFileManager> createFileManager(
@@ -47,8 +47,8 @@ class DownloadFileManager {
 
   Future<DownloadFileManager> _init(String directory) async {
     var lastc = directory.substring(directory.length - 1);
-    if (lastc != '\\' || lastc != '/') {
-      directory = directory + '\\';
+    if (lastc != Platform.pathSeparator) {
+      directory = directory + Platform.pathSeparator;
     }
     _initFileMap(directory);
     return this;
@@ -68,15 +68,15 @@ class DownloadFileManager {
   int get piecesNumber => _stateFile.bitfield.piecesNum;
 
   void _subPieceWriteComplete(int pieceIndex, int begin, int length) {
-    _subPieceCompleteHandles.forEach((handle) {
+    for (var handle in _subPieceCompleteHandles) {
       Timer.run(() => handle(pieceIndex, begin, length));
-    });
+    }
   }
 
   void _subPieceWriteFailed(int pieceIndex, int begin, int length) {
-    _subPieceFailedHandles.forEach((handle) {
+    for (var handle in _subPieceFailedHandles) {
       Timer.run(() => handle(pieceIndex, begin, length));
-    });
+    }
   }
 
   Future<bool> updateBitfield(int index, [bool have = true]) {
@@ -92,22 +92,24 @@ class DownloadFileManager {
   }
 
   void _subPieceReadComplete(int pieceIndex, int begin, List<int> block) {
-    _subPieceReadHandles.forEach((h) {
+    for (var h in _subPieceReadHandles) {
       Timer.run(() => h(pieceIndex, begin, block));
-    });
+    }
   }
 
-  int get downloaded => _stateFile?.downloaded;
+  int get downloaded => _stateFile.downloaded;
 
-  /// 该方法看似只将缓冲区内容写入磁盘，实际上
-  /// 每当缓存写入后都会认为该[pieceIndex]对应`Piece`已经完成，则会去移除
-  /// `_file2pieceMap`中文件对应的piece index，当全部移除完毕，会抛出File Complete事件
+  /// This method appears to only write the buffer content to the disk, but in
+  /// reality,every time the cache is written, it is considered that the [Piece]
+  /// corresponding to [pieceIndex] has been completed. Therefore, it will
+  /// remove the file's corresponding piece index from the _file2pieceMap. When
+  /// all the pieces have been removed, a File Complete event will be triggered.
   Future<bool> flushFiles(Set<int> pieceIndices) async {
     var d = _stateFile.downloaded;
     var flushed = <String>{};
     for (var i = 0; i < pieceIndices.length; i++) {
       var pieceIndex = pieceIndices.elementAt(i);
-      var fs = _piece2fileMap[pieceIndex];
+      var fs = _piece2fileMap?[pieceIndex];
       if (fs == null || fs.isEmpty) continue;
       for (var i = 0; i < fs.length; i++) {
         var file = fs[i];
@@ -125,7 +127,7 @@ class DownloadFileManager {
     }
 
     var msg =
-        '已下载：${d / (1024 * 1024)} mb , 完成度 ${((d / metainfo.length) * 10000).toInt() / 100} %';
+        'downloaded：${d / (1024 * 1024)} mb , Progress ${((d / metainfo.length) * 10000).toInt() / 100} %';
     log(msg, name: runtimeType.toString());
     return true;
   }
@@ -139,9 +141,9 @@ class DownloadFileManager {
   }
 
   void _fireFileComplete(String path) {
-    _fileCompleteHandles.forEach((element) {
+    for (var element in _fileCompleteHandles) {
       Timer.run(() => element(path));
-    });
+    }
   }
 
   void _initFileMap(String directory) {
@@ -160,11 +162,11 @@ class DownloadFileManager {
       }
       if (fe.remainder(metainfo.pieceLength) == 0) endPiece--;
       for (var pieceIndex = startPiece; pieceIndex <= endPiece; pieceIndex++) {
-        var l = _piece2fileMap[pieceIndex];
+        var l = _piece2fileMap?[pieceIndex];
         if (l == null) {
           l = <DownloadFile>[];
-          _piece2fileMap[pieceIndex] = l;
-          if (!localHave(pieceIndex)) pieces.add(pieceIndex);
+          _piece2fileMap?[pieceIndex] = l;
+          if (localHave(pieceIndex)) pieces.add(pieceIndex);
         }
         l.add(df);
       }
@@ -196,7 +198,7 @@ class DownloadFileManager {
   }
 
   void readFile(int pieceIndex, int begin, int length) {
-    var tempFiles = _piece2fileMap[pieceIndex];
+    var tempFiles = _piece2fileMap?[pieceIndex];
     var ps = pieceIndex * metainfo.pieceLength + begin;
     var pe = ps + length;
     if (tempFiles == null || tempFiles.isEmpty) return;
@@ -218,13 +220,13 @@ class DownloadFileManager {
   }
 
   ///
-  /// 将`Sub Piece`的内容写入文件中。完成后会发送 `sub piece complete`事件，
-  /// 如果失败，就会发送`sub piece failed`事件
+  // Writes the content of a Sub Piece to the file. After completion, a sub piece complete event will be sent.
+  /// If it fails, a sub piece failed event will be sent.
   ///
-  /// 该`Sub Piece`是来自于[pieceIndex]对应的`Piece`，内容为[block],起始位置是[begin]。
-  /// 该类不会去验证写入的Sub Piece是否重复，重复内容直接覆盖之前内容
+  /// The Sub Piece is from the Piece corresponding to [pieceIndex], and the content is [block] starting from [begin].
+  /// This class does not validate if the written Sub Piece is a duplicate; it simply overwrites the previous content.
   void writeFile(int pieceIndex, int begin, List<int> block) {
-    var tempFiles = _piece2fileMap[pieceIndex];
+    var tempFiles = _piece2fileMap?[pieceIndex];
     var ps = pieceIndex * metainfo.pieceLength + begin;
     var blockSize = block.length;
     var pe = ps + blockSize;
@@ -251,7 +253,7 @@ class DownloadFileManager {
     return;
   }
 
-  Map _mapDownloadFilePosition(
+  Map? _mapDownloadFilePosition(
       int pieceStart, int pieceEnd, int length, DownloadFile tempFile) {
     var fs = tempFile.start;
     var fe = fs + tempFile.length;
@@ -275,7 +277,7 @@ class DownloadFileManager {
   }
 
   Future close() async {
-    await _stateFile?.close();
+    await _stateFile.close();
     for (var i = 0; i < _files.length; i++) {
       var file = _files.elementAt(i);
       await file.close();
@@ -284,16 +286,16 @@ class DownloadFileManager {
   }
 
   void _clean() {
-    _subPieceCompleteHandles?.clear();
-    _subPieceFailedHandles?.clear();
-    _subPieceReadHandles?.clear();
-    _fileCompleteHandles?.clear();
-    _file2pieceMap?.clear();
+    _subPieceCompleteHandles.clear();
+    _subPieceFailedHandles.clear();
+    _subPieceReadHandles.clear();
+    _fileCompleteHandles.clear();
+    _file2pieceMap.clear();
     _piece2fileMap = null;
   }
 
   Future delete() async {
-    await _stateFile?.delete();
+    await _stateFile.delete();
     for (var i = 0; i < _files.length; i++) {
       var file = _files.elementAt(i);
       await file.delete();

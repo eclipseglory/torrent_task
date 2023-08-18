@@ -3,10 +3,11 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:bencode_dart/bencode_dart.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:dht_dart/dht_dart.dart';
-import 'package:torrent_tracker/torrent_tracker.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
+import 'package:dart_ipify/dart_ipify.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:bittorrent_dht/bittorrent_dht.dart';
+import 'package:dtorrent_tracker/dtorrent_tracker.dart';
 
 import '../peer/peer.dart';
 import '../peer/holepunch.dart';
@@ -20,25 +21,29 @@ class MetadataDownloader
   final Set<Function(List<int> data)> _handlers = {};
 
   final List<InternetAddress> IGNORE_IPS = [
-    InternetAddress.tryParse('0.0.0.0'),
-    InternetAddress.tryParse('127.0.0.1')
+    InternetAddress.tryParse('0.0.0.0')!,
+    InternetAddress.tryParse('127.0.0.1')!
   ];
 
-  InternetAddress localExtenelIP;
+  InternetAddress? localExternalIP;
 
-  int _metaDataSize;
+  int? _metaDataSize;
 
-  int _metaDataBlockNum;
+  int? _metaDataBlockNum;
 
-  int get metaDataSize => _metaDataSize;
+  int? get metaDataSize => _metaDataSize;
 
-  String _localPeerId;
+  num get progress => _metaDataBlockNum != null
+      ? _completedPieces.length / _metaDataBlockNum! * 100
+      : 0;
 
-  List<int> _infoHashBuffer;
+  late String _localPeerId;
+
+  late List<int> _infoHashBuffer;
 
   List<int> get infoHashBuffer => _infoHashBuffer;
 
-  String _infoHashString;
+  final String _infoHashString;
 
   final Set<Peer> _activePeers = {};
 
@@ -48,13 +53,13 @@ class MetadataDownloader
 
   final Set<InternetAddress> _incomingAddress = {};
 
-  DHT _dht;
+  final DHT _dht = DHT();
 
   bool _running = false;
 
-  int _E;
+  final int E = 'e'.codeUnits[0];
 
-  List<int> _infoDatas;
+  List<int> _infoDatas = [];
 
   final Queue<int> _metaDataPieces = Queue();
 
@@ -62,14 +67,15 @@ class MetadataDownloader
 
   final Map<String, Timer> _requestTimeout = {};
 
-  MetadataDownloader(String infoHashString) {
-    _E = 'e'.codeUnits[0];
-    _infoHashString = infoHashString;
+  MetadataDownloader(this._infoHashString) {
     _localPeerId = generatePeerId();
-    _infoHashBuffer = hexString2Buffer(infoHashString);
+    _infoHashBuffer = hexString2Buffer(_infoHashString)!;
     assert(_infoHashBuffer.isNotEmpty && _infoHashBuffer.length == 20,
         'Info Hash String is incorrect');
-    _dht = DHT();
+    _init();
+  }
+  Future<void> _init() async {
+    localExternalIP = InternetAddress.tryParse(await Ipify.ipv4());
   }
 
   void startDownload() {
@@ -85,10 +91,10 @@ class MetadataDownloader
     _running = false;
     await _dht.stop();
     var fs = <Future>[];
-    _activePeers.forEach((peer) {
+    for (var peer in _activePeers) {
       unHookPeer(peer);
       fs.add(peer.dispose());
-    });
+    }
     _activePeers.clear();
     _avalidatedPeers.clear();
     _peersAddress.clear();
@@ -112,7 +118,7 @@ class MetadataDownloader
 
   void _processDHTPeer(CompactAddress peer, String infoHash) {
     if (infoHash == _infoHashString) {
-      addNewPeerAddress(peer);
+      addNewPeerAddress(peer, PeerSource.dht);
     }
   }
 
@@ -121,33 +127,33 @@ class MetadataDownloader
   ///
   /// Usually [socket] is null , unless this peer was incoming connection, but
   /// this type peer was managed by [TorrentTask] , user don't need to know that.
-  void addNewPeerAddress(CompactAddress address,
-      [PeerType type = PeerType.TCP, Socket socket]) {
+  void addNewPeerAddress(CompactAddress address, PeerSource source,
+      [PeerType type = PeerType.TCP, dynamic socket]) {
     if (!_running) return;
-    if (address == null) return;
-    if (address.address == localExtenelIP) return;
+    if (address.address == localExternalIP) return;
     if (socket != null) {
-      // 说明是主动连接的peer,目前只允许一个ip连一次
+      //  Indicates that it is an actively connecting peer, and currently, only
+      //  one connection per IP address is allowed.
       if (!_incomingAddress.add(address.address)) {
         return;
       }
     }
     if (_peersAddress.add(address)) {
-      Peer peer;
+      Peer? peer;
       if (type == PeerType.TCP) {
-        peer =
-            Peer.newTCPPeer(_localPeerId, address, _infoHashBuffer, 0, socket);
+        peer = Peer.newTCPPeer(
+            _localPeerId, address, _infoHashBuffer, 0, socket, source);
       }
       if (type == PeerType.UTP) {
-        peer =
-            Peer.newUTPPeer(_localPeerId, address, _infoHashBuffer, 0, socket);
+        peer = Peer.newUTPPeer(
+            _localPeerId, address, _infoHashBuffer, 0, socket, source);
       }
       if (peer != null) _hookPeer(peer);
     }
   }
 
   void _hookPeer(Peer peer) {
-    if (peer.address.address == localExtenelIP) return;
+    if (peer.address.address == localExternalIP) return;
     if (_peerExsist(peer)) return;
     peer.onDispose(_processPeerDispose);
     peer.onHandShake(_processPeerHandshake);
@@ -161,7 +167,7 @@ class MetadataDownloader
     return _activePeers.contains(id);
   }
 
-  /// 支持哪些扩展在这里添加
+  /// Add supported extensions here
   void _registerExtended(Peer peer) {
     peer.registerExtened('ut_metadata');
     peer.registerExtened('ut_pex');
@@ -169,7 +175,6 @@ class MetadataDownloader
   }
 
   void unHookPeer(Peer peer) {
-    if (peer == null) return;
     peer.offDispose(_processPeerDispose);
     peer.offHandShake(_processPeerHandshake);
     peer.offConnect(_peerConnected);
@@ -210,17 +215,17 @@ class MetadataDownloader
     if (name == 'handshake') {
       if (data['metadata_size'] != null && _metaDataSize == null) {
         _metaDataSize = data['metadata_size'];
-        _infoDatas = List.filled(_metaDataSize, 0);
-        _metaDataBlockNum = _metaDataSize ~/ (16 * 1024);
-        if (_metaDataBlockNum * (16 * 1024) != _metaDataSize) {
-          _metaDataBlockNum++;
+        _infoDatas = List.filled(_metaDataSize!, 0);
+        _metaDataBlockNum = _metaDataSize! ~/ (16 * 1024);
+        if (_metaDataBlockNum! * (16 * 1024) != _metaDataSize) {
+          _metaDataBlockNum = _metaDataBlockNum! + 1;
         }
-        for (var i = 0; i < _metaDataBlockNum; i++) {
+        for (var i = 0; i < _metaDataBlockNum!; i++) {
           _metaDataPieces.add(i);
         }
       }
 
-      if (localExtenelIP != null &&
+      if (localExternalIP != null &&
           data['yourip'] != null &&
           (data['yourip'].length == 4 || data['yourip'].length == 16)) {
         InternetAddress myip;
@@ -230,7 +235,7 @@ class MetadataDownloader
           return;
         }
         if (IGNORE_IPS.contains(myip)) return;
-        localExtenelIP = InternetAddress.fromRawAddress(data['yourip']);
+        localExternalIP = InternetAddress.fromRawAddress(data['yourip']);
       }
 
       var metaDataEventId = peer.getExtendedEventId('ut_metadata');
@@ -242,11 +247,11 @@ class MetadataDownloader
   }
 
   void parseMetaDataMessage(Peer peer, Uint8List data) {
-    var index;
+    int? index;
     var remotePeerId = peer.remotePeerId;
     try {
       for (var i = 0; i < data.length; i++) {
-        if (data[i] == _E && data[i + 1] == _E) {
+        if (data[i] == E && data[i + 1] == E) {
           index = i + 1;
           break;
         }
@@ -265,7 +270,7 @@ class MetadataDownloader
         if (msg['msg_type'] == 2) {
           var piece = msg['piece'];
           if (piece != null && piece < _metaDataBlockNum) {
-            _metaDataPieces.add(piece); //退还拒绝的piece
+            _metaDataPieces.add(piece); //Return rejected piece
             var timer = _requestTimeout.remove(remotePeerId);
             timer?.cancel();
             _requestMetaData();
@@ -278,34 +283,34 @@ class MetadataDownloader
   }
 
   void _pieceDownloadComplete(int piece, int start, List<int> bytes) async {
-    // 防止多次调用
-    if (_completedPieces.length >= _metaDataBlockNum ||
+    // Prevent multiple invocations"
+    if (_completedPieces.length >= _metaDataBlockNum! ||
         _completedPieces.contains(piece)) {
       return;
     }
     var started = piece * 16 * 1024;
     List.copyRange(_infoDatas, started, bytes, start);
     _completedPieces.add(piece);
-    if (_completedPieces.length >= _metaDataBlockNum) {
-      // 此时就停止，然后抛出事件
+    if (_completedPieces.length >= _metaDataBlockNum!) {
+      // At this point, stop and emit the event
       await stop();
-      _handlers.forEach((h) {
+      for (var h in _handlers) {
         Timer.run(() {
           h(_infoDatas);
         });
-      });
+      }
       return;
     }
   }
 
-  Peer _randomAvalidatedPeer() {
+  Peer? _randomAvalidatedPeer() {
     if (_avalidatedPeers.isEmpty) return null;
     var n = _avalidatedPeers.length;
     var index = randomInt(n);
     return _avalidatedPeers.elementAt(index);
   }
 
-  void _requestMetaData([Peer peer]) {
+  void _requestMetaData([Peer? peer]) {
     if (_metaDataPieces.isNotEmpty) {
       peer ??= _randomAvalidatedPeer();
       if (peer == null) return;
@@ -315,7 +320,7 @@ class MetadataDownloader
         _metaDataPieces.add(piece);
         _requestMetaData();
       });
-      _requestTimeout[peer.remotePeerId] = timer;
+      _requestTimeout[peer.remotePeerId!] = timer;
       peer.sendExtendMessage('ut_metadata', msg);
     }
   }
@@ -332,12 +337,12 @@ class MetadataDownloader
       peer.sendExtendMessage('ut_holepunch', message);
       return;
     }
-    addNewPeerAddress(address);
+    addNewPeerAddress(address, PeerSource.pex);
   }
 
   @override
   void holePunchConnect(CompactAddress ip) {
-    addNewPeerAddress(ip, PeerType.UTP);
+    addNewPeerAddress(ip, PeerSource.holepunch, PeerType.UTP);
   }
 
   @override

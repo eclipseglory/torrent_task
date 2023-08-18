@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:developer';
 import 'dart:io';
 
-import 'package:torrent_model/torrent_model.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:dart_ipify/dart_ipify.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
 
 import 'bitfield.dart';
 import 'peer.dart';
@@ -22,11 +24,11 @@ const MAX_UPLOADED_NOTIFY_SIZE = 1024 * 1024 * 10; // 10 mb
 
 ///
 /// TODO:
-/// - 没有处理对外的Suggest Piece/Fast Allow
+/// - The external Suggest Piece/Fast Allow requests are not handled.
 class PeersManager with Holepunch, PEX {
   final List<InternetAddress> IGNORE_IPS = [
-    InternetAddress.tryParse('0.0.0.0'),
-    InternetAddress.tryParse('127.0.0.1')
+    InternetAddress.tryParse('0.0.0.0')!,
+    InternetAddress.tryParse('127.0.0.1')!
   ];
 
   bool _disposed = false;
@@ -39,9 +41,9 @@ class PeersManager with Holepunch, PEX {
 
   final Set<InternetAddress> _incomingAddress = {};
 
-  InternetAddress localExtenelIP;
+  InternetAddress? localExternalIP;
 
-  /// 写入磁盘的缓存最大值
+  /// The maximum size of the disk write cache.
   int maxWriteBufferSize;
 
   final _flushIndicesBuffer = <int>{};
@@ -56,9 +58,9 @@ class PeersManager with Holepunch, PEX {
 
   int _downloaded = 0;
 
-  int _startedTime;
+  int? _startedTime;
 
-  int _endTime;
+  int? _endTime;
 
   int _uploadedNotifySize = 0;
 
@@ -72,7 +74,7 @@ class PeersManager with Holepunch, PEX {
 
   bool _paused = false;
 
-  Timer _keepAliveTimer;
+  Timer? _keepAliveTimer;
 
   final List _pausedRequest = [];
 
@@ -83,16 +85,17 @@ class PeersManager with Holepunch, PEX {
   PeersManager(this._localPeerId, this._pieceManager, this._pieceProvider,
       this._fileManager, this._metaInfo,
       [this.maxWriteBufferSize = MAX_WRITE_BUFFER_SIZE]) {
-    assert(_pieceManager != null &&
-        _pieceProvider != null &&
-        _fileManager != null);
     // hook FileManager and PieceManager
     _fileManager.onSubPieceWriteComplete(_processSubPieceWriteComplte);
     _fileManager.onSubPieceReadComplete(readSubPieceComplete);
     _pieceManager.onPieceComplete(_processPieceWriteComplete);
-
+    _init();
     // Start pex interval
     startPEX();
+  }
+
+  Future<void> _init() async {
+    localExternalIP = InternetAddress.tryParse(await Ipify.ipv4());
   }
 
   /// Task is paused
@@ -100,19 +103,19 @@ class PeersManager with Holepunch, PEX {
 
   /// All peers number. Include the connecting peer.
   int get peersNumber {
-    if (_peersAddress == null || _peersAddress.isEmpty) return 0;
+    if (_peersAddress.isEmpty) return 0;
     return _peersAddress.length;
   }
 
   /// All connected peers number. Include seeder.
   int get connectedPeersNumber {
-    if (_activePeers == null || _activePeers.isEmpty) return 0;
+    if (_activePeers.isEmpty) return 0;
     return _activePeers.length;
   }
 
   /// All seeder number
   int get seederNumber {
-    if (_activePeers == null || _activePeers.isEmpty) return 0;
+    if (_activePeers.isEmpty) return 0;
     var c = 0;
     return _activePeers.fold(c, (previousValue, element) {
       if (element.isSeeder) {
@@ -128,9 +131,9 @@ class PeersManager with Holepunch, PEX {
   /// the end time is when manager was disposed.
   int get liveTime {
     if (_startedTime == null) return 0;
-    var passed = DateTime.now().millisecondsSinceEpoch - _startedTime;
+    var passed = DateTime.now().millisecondsSinceEpoch - _startedTime!;
     if (_endTime != null) {
-      passed = _endTime - _startedTime;
+      passed = _endTime! - _startedTime!;
     }
     return passed;
   }
@@ -157,7 +160,7 @@ class PeersManager with Holepunch, PEX {
   ///
   /// This speed caculation: sum(`active peer download speed`)
   double get currentDownloadSpeed {
-    if (_activePeers == null || _activePeers.isEmpty) return 0.0;
+    if (_activePeers.isEmpty) return 0.0;
     return _activePeers.fold(
         0.0, (p, element) => p + element.currentDownloadSpeed);
   }
@@ -166,13 +169,13 @@ class PeersManager with Holepunch, PEX {
   ///
   /// This speed caculation: sum(`active peer upload speed`)
   double get uploadSpeed {
-    if (_activePeers == null || _activePeers.isEmpty) return 0.0;
+    if (_activePeers.isEmpty) return 0.0;
     return _activePeers.fold(
         0.0, (p, element) => p + element.averageUploadSpeed);
   }
 
   void _hookPeer(Peer peer) {
-    if (peer.address.address == localExtenelIP) return;
+    if (peer.address.address == localExternalIP) return;
     if (_peerExsist(peer)) return;
     peer.onDispose(_processPeerDispose);
     peer.onBitfield(_processBitfieldUpdate);
@@ -194,14 +197,15 @@ class PeersManager with Holepunch, PEX {
     peer.connect();
   }
 
-  /// 支持哪些扩展在这里添加
+  ///  Add supported extensions here
   void _registerExtended(Peer peer) {
+    log('registering extensions for peer ${peer.address}',
+        name: runtimeType.toString());
     peer.registerExtened('ut_pex');
     peer.registerExtened('ut_holepunch');
   }
 
   void unHookPeer(Peer peer) {
-    if (peer == null) return;
     peer.offDispose(_processPeerDispose);
     peer.offBitfield(_processBitfieldUpdate);
     peer.offHaveAll(_processHaveAll);
@@ -224,6 +228,7 @@ class PeersManager with Holepunch, PEX {
   }
 
   void _processExtendedMessage(dynamic source, String name, dynamic data) {
+    log('Processing Extended Message $name', name: runtimeType.toString());
     if (name == 'ut_holepunch') {
       parseHolepuchMessage(data);
     }
@@ -231,7 +236,7 @@ class PeersManager with Holepunch, PEX {
       parsePEXDatas(source, data);
     }
     if (name == 'handshake') {
-      if (localExtenelIP != null &&
+      if (localExternalIP != null &&
           data['yourip'] != null &&
           (data['yourip'].length == 4 || data['yourip'].length == 16)) {
         InternetAddress myip;
@@ -241,7 +246,7 @@ class PeersManager with Holepunch, PEX {
           return;
         }
         if (IGNORE_IPS.contains(myip)) return;
-        localExtenelIP = InternetAddress.fromRawAddress(data['yourip']);
+        localExternalIP = InternetAddress.fromRawAddress(data['yourip']);
       }
     }
   }
@@ -251,25 +256,26 @@ class PeersManager with Holepunch, PEX {
   ///
   /// Usually [socket] is null , unless this peer was incoming connection, but
   /// this type peer was managed by [TorrentTask] , user don't need to know that.
-  void addNewPeerAddress(CompactAddress address,
-      [PeerType type = PeerType.TCP, Socket socket]) {
+  void addNewPeerAddress(CompactAddress? address, PeerSource source,
+      {PeerType? type, dynamic socket}) {
     if (address == null) return;
-    if (address.address == localExtenelIP) return;
+    if (IGNORE_IPS.contains(address.address)) return;
+    if (address.address == localExternalIP) return;
     if (socket != null) {
-      // 说明是主动连接的peer,目前只允许一个ip连一次
+      // Indicates that it is an actively connected peer, and currently, only one IP address is allowed to connect at a time.
       if (!_incomingAddress.add(address.address)) {
         return;
       }
     }
     if (_peersAddress.add(address)) {
-      Peer peer;
-      if (type == PeerType.TCP) {
+      Peer? peer;
+      if (type == null || type == PeerType.TCP) {
         peer = Peer.newTCPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
-            _metaInfo.pieces.length, socket);
+            _metaInfo.pieces.length, socket, source);
       }
-      if (type == PeerType.UTP) {
+      if (type == null || type == PeerType.UTP) {
         peer = Peer.newUTPPeer(_localPeerId, address, _metaInfo.infoHashBuffer,
-            _metaInfo.pieces.length, socket);
+            _metaInfo.pieces.length, socket, source);
       }
       if (peer != null) _hookPeer(peer);
     }
@@ -282,11 +288,11 @@ class PeersManager with Holepunch, PEX {
   void _processPieceWriteComplete(int index) async {
     if (_fileManager.localHave(index)) return;
     await _fileManager.updateBitfield(index);
-    _activePeers.forEach((peer) {
+    for (var peer in _activePeers) {
       // if (!peer.remoteHave(index)) {
       peer.sendHave(index);
       // }
-    });
+    }
     _flushIndicesBuffer.add(index);
     if (_fileManager.isAllComplete) {
       await _flushFiles(_flushIndicesBuffer);
@@ -299,8 +305,8 @@ class PeersManager with Holepunch, PEX {
   Future _flushFiles(final Set<int> indices) async {
     if (indices.isEmpty) return;
     var piecesSize = _metaInfo.pieceLength;
-    var _buffer = indices.length * piecesSize;
-    if (_buffer >= maxWriteBufferSize || _fileManager.isAllComplete) {
+    var buffer = indices.length * piecesSize;
+    if (buffer >= maxWriteBufferSize || _fileManager.isAllComplete) {
       var temp = Set<int>.from(indices);
       indices.clear();
       await _fileManager.flushFiles(temp);
@@ -309,9 +315,9 @@ class PeersManager with Holepunch, PEX {
   }
 
   void _fireAllComplete() {
-    _allcompletehandles.forEach((element) {
+    for (var element in _allcompletehandles) {
       Timer.run(() => element());
-    });
+    }
   }
 
   bool onAllComplete(void Function() h) {
@@ -334,7 +340,7 @@ class PeersManager with Holepunch, PEX {
       if (request[0] == pieceIndex && request[1] == begin) {
         dindex.add(i);
         var peer = request[2] as Peer;
-        if (peer != null && !peer.isDisposed) {
+        if (!peer.isDisposed) {
           if (peer.sendPiece(pieceIndex, begin, block)) {
             _uploaded += block.length;
             _uploadedNotifySize += block.length;
@@ -344,9 +350,9 @@ class PeersManager with Holepunch, PEX {
       }
     }
     if (dindex.isNotEmpty) {
-      dindex.forEach((i) {
+      for (var i in dindex) {
         _remoteRequest.removeAt(i);
-      });
+      }
       if (_uploadedNotifySize >= MAX_UPLOADED_NOTIFY_SIZE) {
         _uploadedNotifySize = 0;
         _fileManager.updateUpload(_uploaded);
@@ -354,7 +360,7 @@ class PeersManager with Holepunch, PEX {
     }
   }
 
-  /// 即使对方choke了我，也可以下载
+  /// Even if the other peer has choked me, I can still download.
   void _processAllowFast(dynamic source, int index) {
     var peer = source as Peer;
     var piece = _pieceProvider[index];
@@ -373,15 +379,15 @@ class PeersManager with Holepunch, PEX {
   }
 
   void _pushSubpicesBack(List<List<int>> requests) {
-    if (requests == null || requests.isEmpty) return;
-    requests.forEach((element) {
+    if (requests.isEmpty) return;
+    for (var element in requests) {
       var pindex = element[0];
       var begin = element[1];
-      // TODO 这里很危险，目前都是已16kb来分解一个piece，如果不是呢？
+      // TODO This is dangerous here. Currently, we are dividing a piece into 16 KB chunks. What if it's not the case?
       var piece = _pieceManager[pindex];
       var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
       piece?.pushSubPiece(subindex);
-    });
+    }
   }
 
   void _processPeerDispose(dynamic source, [dynamic reason]) {
@@ -399,9 +405,9 @@ class PeersManager with Holepunch, PEX {
     _pushSubpicesBack(bufferRequests);
 
     var completedPieces = peer.remoteCompletePieces;
-    completedPieces.forEach((index) {
+    for (var index in completedPieces) {
       _pieceProvider[index]?.removeAvalidatePeer(peer.id);
-    });
+    }
     _pausedRemoteRequest.remove(peer.id);
     var tempIndex = [];
     for (var i = 0; i < _pausedRequest.length; i++) {
@@ -410,9 +416,9 @@ class PeersManager with Holepunch, PEX {
         tempIndex.add(i);
       }
     }
-    tempIndex.forEach((index) {
+    for (var index in tempIndex) {
       _pausedRequest.removeAt(index);
-    });
+    }
 
     if (reason is TCPConnectException) {
       // print('TCPConnectException');
@@ -422,11 +428,15 @@ class PeersManager with Holepunch, PEX {
 
     if (reconnect) {
       if (_activePeers.length < MAX_ACTIVE_PEERS && !isDisposed) {
-        addNewPeerAddress(peer.address, peer.type);
+        addNewPeerAddress(
+          peer.address,
+          peer.source,
+          type: peer.type,
+        );
       }
     } else {
       if (peer.isSeeder && !_fileManager.isAllComplete && !isDisposed) {
-        addNewPeerAddress(peer.address, peer.type);
+        addNewPeerAddress(peer.address, peer.source, type: peer.type);
       }
     }
   }
@@ -446,10 +456,10 @@ class PeersManager with Holepunch, PEX {
     }
     var peer = source as Peer;
 
-    Piece piece;
+    Piece? piece;
     if (pieceIndex != -1) {
       piece = _pieceProvider[pieceIndex];
-      if (!piece.haveAvalidateSubPiece()) {
+      if (piece != null && !piece.haveAvalidateSubPiece()) {
         piece = _pieceManager.selectPiece(peer.id, peer.remoteCompletePieces,
             _pieceProvider, peer.remoteSuggestPieces);
       }
@@ -459,8 +469,8 @@ class PeersManager with Holepunch, PEX {
     }
     if (piece == null) return;
 
-    var subIndex = piece.popSubPiece();
-    var size = DEFAULT_REQUEST_LENGTH; // block大小现算
+    var subIndex = piece.popSubPiece()!;
+    var size = DEFAULT_REQUEST_LENGTH; // Block size is calculated dynamically.
     var begin = subIndex * size;
     if ((begin + size) > piece.byteLength) {
       size = piece.byteLength - begin;
@@ -497,7 +507,7 @@ class PeersManager with Holepunch, PEX {
       var peer = source as Peer;
       _pausedRemoteRequest[peer.id] ??= [];
       var pausedRequest = _pausedRemoteRequest[peer.id];
-      pausedRequest.add([source, index, begin, length]);
+      pausedRequest?.add([source, index, begin, length]);
       return;
     }
     var peer = source as Peer;
@@ -514,12 +524,13 @@ class PeersManager with Holepunch, PEX {
     _processBitfieldUpdate(source, null);
   }
 
-  void _processBitfieldUpdate(dynamic source, Bitfield bitfield) {
+  void _processBitfieldUpdate(dynamic source, Bitfield? bitfield) {
     var peer = source as Peer;
     if (bitfield != null) {
       if (peer.interestedRemote) return;
       if (_fileManager.isAllComplete && peer.isSeeder) {
-        peer.dispose(BadException('已经下载完成不再连接Seeder'));
+        peer.dispose(BadException(
+            "Do not connect to Seeder if the download is already completed"));
         return;
       }
       for (var i = 0; i < _fileManager.piecesNumber; i++) {
@@ -537,8 +548,8 @@ class PeersManager with Holepunch, PEX {
   void _processHaveUpdate(dynamic source, List<int> indices) {
     var peer = source as Peer;
     var flag = false;
-    indices.forEach((index) {
-      if (_pieceProvider[index] == null) return;
+    for (var index in indices) {
+      if (_pieceProvider[index] == null) continue;
 
       if (!_fileManager.localHave(index)) {
         if (peer.chokeMe) {
@@ -548,25 +559,25 @@ class PeersManager with Holepunch, PEX {
           _pieceProvider[index]?.addAvalidatePeer(peer.id);
         }
       }
-    });
+    }
     if (flag && peer.isSleeping) Timer.run(() => _requestPieces(peer));
   }
 
   void _processChokeChange(dynamic source, bool choke) {
     var peer = source as Peer;
-    // 更新pieces的可用Peer
+    // Update available peers for pieces.
     if (!choke) {
       var completedPieces = peer.remoteCompletePieces;
-      completedPieces.forEach((index) {
+      for (var index in completedPieces) {
         _pieceProvider[index]?.addAvalidatePeer(peer.id);
-      });
-      // 这里开始通知request;
+      }
+      // Here, start notifying requests.
       Timer.run(() => _requestPieces(peer));
     } else {
       var completedPieces = peer.remoteCompletePieces;
-      completedPieces.forEach((index) {
+      for (var index in completedPieces) {
         _pieceProvider[index]?.removeAvalidatePeer(peer.id);
-      });
+      }
     }
   }
 
@@ -575,14 +586,14 @@ class PeersManager with Holepunch, PEX {
     if (interested) {
       peer.sendChoke(false);
     } else {
-      peer.sendChoke(true); // 不感兴趣就choke它
+      peer.sendChoke(true); // Choke it if not interested.
     }
   }
 
   void _processRequestTimeout(dynamic source, List<List<int>> requests) {
     var peer = source as Peer;
     var flag = false;
-    requests.forEach((element) {
+    for (var element in requests) {
       if (element[4] >= 3) {
         flag = true;
         Timer.run(() => peer.requestCancel(element[0], element[1], element[2]));
@@ -592,21 +603,21 @@ class PeersManager with Holepunch, PEX {
         var piece = _pieceManager[index];
         piece?.pushSubPiece(subindex);
       }
-    });
-    // 唤醒其他可能没有工作的peer
+    }
+    // Wake up other possibly idle peers.
     if (flag) {
-      _activePeers.forEach((p) {
+      for (var p in _activePeers) {
         if (p != peer && p.isSleeping) {
           Timer.run(() => _requestPieces(p));
         }
-      });
+      }
     }
   }
 
   void _sendKeepAliveToAll() {
-    _activePeers?.forEach((peer) {
+    for (var peer in _activePeers) {
       Timer.run(() => _keepAlive(peer));
-    });
+    }
   }
 
   void _keepAlive(Peer peer) {
@@ -632,15 +643,15 @@ class PeersManager with Holepunch, PEX {
     _paused = false;
     _keepAliveTimer?.cancel();
     _keepAliveTimer = null;
-    _pausedRequest.forEach((element) {
+    for (var element in _pausedRequest) {
       var peer = element[0] as Peer;
       var index = element[1];
       if (!peer.isDisposed) Timer.run(() => _requestPieces(peer, index));
-    });
+    }
     _pausedRequest.clear();
 
     _pausedRemoteRequest.forEach((key, value) {
-      value.forEach((element) {
+      for (var element in value) {
         var peer = element[0] as Peer;
         var index = element[1];
         var begin = element[2];
@@ -648,17 +659,17 @@ class PeersManager with Holepunch, PEX {
         if (!peer.isDisposed) {
           Timer.run(() => _processRemoteRequest(peer, index, begin, length));
         }
-      });
+      }
     });
     _pausedRemoteRequest.clear();
   }
 
   Future disposeAllSeeder([dynamic reason]) async {
-    _activePeers?.forEach((peer) async {
+    for (var peer in _activePeers) {
       if (peer.isSeeder) {
         await peer.dispose(reason);
       }
-    });
+    }
     return;
   }
 
@@ -674,14 +685,14 @@ class PeersManager with Holepunch, PEX {
     _pieceManager.offPieceComplete(_processPieceWriteComplete);
 
     await _flushFiles(_flushIndicesBuffer);
-    _flushIndicesBuffer?.clear();
-    _allcompletehandles?.clear();
-    _noActivePeerhandles?.clear();
-    _remoteRequest?.clear();
-    _pausedRequest?.clear();
-    _pausedRemoteRequest?.clear();
-    Function _disposePeers = (Set<Peer> peers) async {
-      if (peers != null && peers.isNotEmpty) {
+    _flushIndicesBuffer.clear();
+    _allcompletehandles.clear();
+    _noActivePeerhandles.clear();
+    _remoteRequest.clear();
+    _pausedRequest.clear();
+    _pausedRemoteRequest.clear();
+    disposePeers(Set<Peer> peers) async {
+      if (peers.isNotEmpty) {
         for (var i = 0; i < peers.length; i++) {
           var peer = peers.elementAt(i);
           unHookPeer(peer);
@@ -689,8 +700,9 @@ class PeersManager with Holepunch, PEX {
         }
       }
       peers.clear();
-    };
-    await _disposePeers(_activePeers);
+    }
+
+    await disposePeers(_activePeers);
   }
 
   //TODO test:
@@ -713,7 +725,7 @@ class PeersManager with Holepunch, PEX {
       peer.sendExtendMessage('ut_holepunch', message);
       return;
     }
-    addNewPeerAddress(address);
+    addNewPeerAddress(address, PeerSource.pex);
   }
 
   @override
@@ -721,7 +733,8 @@ class PeersManager with Holepunch, PEX {
 
   @override
   void holePunchConnect(CompactAddress ip) {
-    addNewPeerAddress(ip, PeerType.UTP);
+    log("holePunch connect $ip");
+    addNewPeerAddress(ip, PeerSource.holepunch, type: PeerType.UTP);
   }
 
   int get utpPeerCount {
@@ -753,12 +766,12 @@ class PeersManager with Holepunch, PEX {
 
   @override
   void holePunchError(String err, CompactAddress ip) {
-    // print('holepunch error - $err');
+    log('holepunch error - $err');
   }
 
   @override
   void holePunchRendezvous(CompactAddress ip) {
     // TODO: implement holePunchRendezvous
-    // print('收到 holePunch Rendezvous');
+    log('Received holePunch Rendezvous from $ip');
   }
 }

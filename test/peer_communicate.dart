@@ -3,11 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/torrent_task.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
 
 void main() async {
-  ServerSocket serverSocket;
+  ServerSocket? serverSocket;
   int serverPort;
   var infoBuffer = randomBytes(20);
   var piecesNum = 20;
@@ -42,14 +42,15 @@ void main() async {
         CompactAddress(socket.address, socket.port),
         infoBuffer,
         piecesNum,
-        socket);
+        socket,
+        PeerSource.incoming);
     peer.onConnect((peer) {
       callMap['connect1'] = true;
       peer.sendHandShake();
     });
     peer.onHandShake((peer, remotePeerId, data) {
       callMap['handshake1'] = true;
-      print('receive ${remotePeerId} handshake');
+      print('receive $remotePeerId handshake');
       peer.sendInterested(true);
       print('send interested to $remotePeerId');
     });
@@ -125,8 +126,8 @@ void main() async {
       var id = String.fromCharCodes(block.getRange(2, 22));
       assert(id == peer.remotePeerId);
       if (index == 4) {
-        print('测试完毕 $callMap');
-        await peer.dispose(BadException('测试完成'));
+        print('Testing completed. $callMap');
+        await peer.dispose(BadException('Testing completed'));
       }
     });
     peer.onDispose((peer, [reason]) async {
@@ -140,10 +141,11 @@ void main() async {
   var pid = generatePeerId();
   var peer = Peer.newTCPPeer(
       pid,
-      CompactAddress(InternetAddress.tryParse('127.0.0.1'), serverPort),
+      CompactAddress(InternetAddress.tryParse('127.0.0.1')!, serverPort),
       infoBuffer,
       piecesNum,
-      null);
+      null,
+      PeerSource.manual);
   peer.onConnect((peer) {
     callMap['connect2'] = true;
     print('connect server success');
@@ -152,7 +154,7 @@ void main() async {
   });
   peer.onHandShake((peer, remotePeerId, data) {
     callMap['handshake2'] = true;
-    print('receive ${remotePeerId} handshake');
+    print('receive $remotePeerId handshake');
     peer.sendBitfield(bitfield);
     print('send bitfield to server');
     peer.sendInterested(true);
@@ -190,15 +192,15 @@ void main() async {
       view.setUint8(i + 2, idcontent[i]);
     }
     peer.sendPiece(index, begin, content);
-    peer.sendChoke(true); // 测试allow fast
+    peer.sendChoke(true); // Testing "allow fast".
     peer.sendAllowFast(4);
   });
   peer.onDispose((peer, [reason]) async {
     print('come out destroyed : $reason');
     await serverSocket?.close();
     serverSocket = null;
-    var callAll = callMap.values
-        .fold(true, (previousValue, element) => (previousValue && element));
+    var callAll = callMap.values.fold<bool>(
+        true, (previousValue, element) => (previousValue && element));
     assert(callAll);
   });
   print('connect to : ${peer.address}');

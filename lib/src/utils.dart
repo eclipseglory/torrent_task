@@ -1,8 +1,7 @@
 import 'dart:convert';
-import 'dart:math';
 
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/torrent_task.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
 
 String generatePeerId([String prefix = ID_PREFIX]) {
   var r = randomBytes(9);
@@ -11,7 +10,7 @@ String generatePeerId([String prefix = ID_PREFIX]) {
   return id;
 }
 
-List<int> hexString2Buffer(String hexStr) {
+List<int>? hexString2Buffer(String hexStr) {
   // ignore: prefer_is_empty
   if (hexStr.isEmpty || hexStr.length.remainder(2) != 0) return null;
   var size = hexStr.length ~/ 2;

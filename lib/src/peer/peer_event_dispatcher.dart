@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'bitfield.dart';
 
-/// 带有 [index],[begin],[length]参数的方法
 typedef PieceConfigHandle = void Function(
     dynamic source, int index, int begin, int length);
 typedef NoneParamHandle = void Function(dynamic source);
@@ -29,9 +28,9 @@ const PEER_EVENT_SUGGEST_PIECE = 'suggest_piece';
 const PEER_EVENT_ALLOW_FAST = 'allow_fast';
 const PEER_EVENT_REJECT_REQUEST = 'reject_request';
 
-/// 专门负责添加、删除Peer事件回调方法的 `mixin`
+// A mixin specifically responsible for adding and removing Peer event callback methods.
 mixin PeerEventDispatcher {
-  /// 所有事件回调方法Map
+  /// Map of all event callback methods.
   final _handleFunctions = <String, Set<Function>>{};
 
   Set<Function> _getFunctionSet(String key) {
@@ -57,7 +56,7 @@ mixin PeerEventDispatcher {
     });
   }
 
-  void fireHandshakeEvent(String remotePeerId, dynamic data) {
+  void fireHandshakeEvent(String? remotePeerId, dynamic data) {
     var fSet = _handleFunctions[PEER_EVENT_HANDSHAKE];
     fSet?.forEach((f) {
       Timer.run(() => f(this, remotePeerId, data));
@@ -92,7 +91,7 @@ mixin PeerEventDispatcher {
     });
   }
 
-  void fireBitfield(final Bitfield bitfield) {
+  void fireBitfield(final Bitfield? bitfield) {
     var fSet = _handleFunctions[PEER_EVENT_BITFIELD];
     fSet?.forEach((f) {
       Timer.run(() => f(this, bitfield));

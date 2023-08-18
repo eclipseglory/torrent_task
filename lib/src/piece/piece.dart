@@ -11,7 +11,7 @@ class Piece {
 
   final Set<String> _avalidatePeers = <String>{};
 
-  Queue<int> _subPiecesQueue;
+  late Queue<int> _subPiecesQueue;
 
   final Set<int> _downloadedSubPieces = <int>{};
 
@@ -75,21 +75,20 @@ class Piece {
   }
 
   ///
-  /// 子Piece下载完成。
+  /// SubPiece download completed.
   ///
-  /// 将子piece放入 `_writtingSubPieces` 队列中
-  /// 设置子Piece为完成状态。如果该子Piece已经设置过，返回`false`,没有设置
-  /// 过说明设置成功，返回`true`
+  /// Put the subpiece into the _writtingSubPieces queue and mark it as completed.
+  /// If the subpiece has already been marked, return false; if it hasn't been marked
+  /// yet, mark it as completed and return true.
   bool subPieceDownloadComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
     _subPiecesQueue.remove(subindex);
     return _writtingSubPieces.add(subindex);
   }
 
-
   bool subPieceWriteComplete(int begin) {
     var subindex = begin ~/ DEFAULT_REQUEST_LENGTH;
-    // _subPiecesQueue.remove(subindex); // 有这可能？
+    // _subPiecesQueue.remove(subindex); // Is this possible?
     _writtingSubPieces.remove(subindex);
     var re = _downloadedSubPieces.add(subindex);
     if (isCompleted) {
@@ -99,11 +98,12 @@ class Piece {
   }
 
   ///
-  ///子Piece [subIndex]是否还在。
+  /// Whether the sub-piece [subIndex] is still available.
   ///
-  ///当子Piece被弹出栈用于下载，或者子Piece已经下载完成，那么就视为该Piece已经不再包含该子Piece
+  /// When a sub-piece is popped from the stack for download or if the sub-piece has already been downloaded,
+  /// the piece is considered to no longer contain that sub-piece.
   bool containsSubpiece(int subIndex) {
-    return subPieceQueue?.contains(subIndex);
+    return subPieceQueue.contains(subIndex);
   }
 
   bool containsAvalidatePeer(String id) {
@@ -111,7 +111,7 @@ class Piece {
   }
 
   bool removeSubpiece(int subIndex) {
-    return subPieceQueue?.remove(subIndex);
+    return subPieceQueue.remove(subIndex);
   }
 
   bool addAvalidatePeer(String id) {
@@ -126,7 +126,7 @@ class Piece {
     _avalidatePeers.clear();
   }
 
-  int popSubPiece() {
+  int? popSubPiece() {
     if (subPieceQueue.isNotEmpty) return subPieceQueue.removeFirst();
     return null;
   }
@@ -139,7 +139,7 @@ class Piece {
     return true;
   }
 
-  int popLastSubPiece() {
+  int? popLastSubPiece() {
     if (subPieceQueue.isNotEmpty) return subPieceQueue.removeLast();
     return null;
   }
@@ -168,9 +168,9 @@ class Piece {
   int get hashCode => hashString.hashCode;
 
   @override
-  bool operator ==(b) {
-    if (b is Piece) {
-      return b.hashString == hashString;
+  bool operator ==(other) {
+    if (other is Piece) {
+      return other.hashString == hashString;
     }
     return false;
   }

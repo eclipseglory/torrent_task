@@ -10,21 +10,21 @@ const MAX_WINDOW = 1048576;
 
 const RECORD_TIME = 5000000;
 
-/// 最大每次增加的request为3
+/// The maximum number of requests to be increased in each round is 3.
 const MAX_CWND_INCREASE_REQUESTS_PER_RTT = 3 * 16384;
 
-/// LEDBAT拥塞控制
+/// LEDBAT Congestion Control
 ///
-/// 注意，所有时间单位都是微秒
+/// Note: All time units are in microseconds
 mixin CongestionControl {
-  // 初始是10秒
+  // The initial value is 10 seconds.
   double _rto = 10000000;
 
-  double _srtt;
+  double? _srtt;
 
-  double _rttvar;
+  double? _rttvar;
 
-  Timer _timeout;
+  Timer? _timeout;
 
   int _allowWindowSize = DEFAULT_REQUEST_LENGTH;
 
@@ -45,26 +45,26 @@ mixin CongestionControl {
     return _handles.remove(handle);
   }
 
-  /// 更新超时时间
+  /// Update the timeout.
   void updateRTO(int rtt) {
     if (rtt == 0) return;
     if (_srtt == null) {
       _srtt = rtt.toDouble();
       _rttvar = rtt / 2;
     } else {
-      _rttvar = (1 - 0.25) * _rttvar + 0.25 * (_srtt - rtt).abs();
-      _srtt = (1 - 0.125) * _srtt + 0.125 * rtt;
+      _rttvar = (1 - 0.25) * _rttvar! + 0.25 * (_srtt! - rtt).abs();
+      _srtt = (1 - 0.125) * _srtt! + 0.125 * rtt;
     }
-    _rto = _srtt + max(100000, 4 * _rttvar);
-    // 不到1秒，就设置为1秒
+    _rto = _srtt! + max(100000, 4 * _rttvar!);
+    // If less than 1 second, set it to 1 second.
     _rto = max(_rto, 1000000);
   }
 
   void fireRequestTimeoutEvent(List<List<int>> requests) {
-    if (requests == null || requests.isEmpty) return;
-    _handles.forEach((f) {
+    if (requests.isEmpty) return;
+    for (var f in _handles) {
       Timer.run(() => f(this, requests));
-    });
+    }
   }
 
   List<List<int>> get currentRequestBuffer;
@@ -76,7 +76,7 @@ mixin CongestionControl {
   void startRequestDataTimeout([int times = 0]) {
     _timeout?.cancel();
     var requests = currentRequestBuffer;
-    if (requests == null || requests.isEmpty) return;
+    if (requests.isEmpty) return;
     _timeout = Timer(Duration(microseconds: _rto.toInt()), () {
       if (requests.isEmpty) return;
       if (times + 1 >= 5) {
@@ -93,9 +93,9 @@ mixin CongestionControl {
         if (requests.isEmpty) break;
         first = requests.first;
       }
-      timeoutR.forEach((request) {
+      for (var request in timeoutR) {
         orderResendRequest(request[0], request[1], request[2], request[4]);
-      });
+      }
 
       times++;
       _rto *= 2;
@@ -108,25 +108,25 @@ mixin CongestionControl {
   void ackRequest(List<List<int>> requests) {
     if (requests.isEmpty) return;
     var downloaded = 0;
-    int minRtt;
-    requests.forEach((request) {
-      // 重发后收到的不管
-      if (request == null || request[4] != 0) return;
+    int? minRtt;
+    for (var request in requests) {
+      // Ignore the received packets after resending.
+      if (request[4] != 0) continue;
       var now = DateTime.now().microsecondsSinceEpoch;
       var rtt = now - request[3];
       minRtt ??= rtt;
       minRtt = min(minRtt, rtt);
       updateRTO(rtt);
       downloaded += request[2];
-    });
+    }
     if (downloaded == 0 || minRtt == null) return;
     var artt = minRtt;
-    var delay_factor = (CCONTROL_TARGET - artt) / CCONTROL_TARGET;
-    var window_factor = downloaded / _allowWindowSize;
-    var scaled_gain =
-        MAX_CWND_INCREASE_REQUESTS_PER_RTT * delay_factor * window_factor;
+    var delayFactor = (CCONTROL_TARGET - artt) / CCONTROL_TARGET;
+    var windowFactor = downloaded / _allowWindowSize;
+    var scaledGain =
+        MAX_CWND_INCREASE_REQUESTS_PER_RTT * delayFactor * windowFactor;
 
-    _allowWindowSize += scaled_gain.toInt();
+    _allowWindowSize += scaledGain.toInt();
     _allowWindowSize = max(DEFAULT_REQUEST_LENGTH, _allowWindowSize);
     _allowWindowSize = min(MAX_WINDOW, _allowWindowSize);
   }

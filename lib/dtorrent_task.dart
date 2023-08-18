@@ -1,4 +1,4 @@
-library torrent_task;
+library dtorrent_task;
 
 import 'dart:io';
 
@@ -7,11 +7,11 @@ export 'src/file/file_base.dart';
 export 'src/piece/piece_base.dart';
 export 'src/peer/peer_base.dart';
 
-/// Peer ID前缀
+/// Peer ID prefix
 const ID_PREFIX = '-DT0201-';
 
-/// 当前版本号
-Future<String> getTorrenTaskVersion() async {
+/// Current version number
+Future<String?> getTorrenTaskVersion() async {
   var file = File('pubspec.yaml');
   if (await file.exists()) {
     var lines = await file.readAsLines();

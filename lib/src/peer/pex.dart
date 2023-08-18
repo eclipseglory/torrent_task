@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:bencode_dart/bencode_dart.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
 
 import '../peer/peer.dart';
 
@@ -17,51 +18,51 @@ const pex_flag_supports_holepunch = 0x08;
 const pex_flag_reachable = 0x10;
 
 mixin PEX {
-  Timer _timer;
+  Timer? _timer;
 
   final Set<CompactAddress> _lastUTPEX = <CompactAddress>{};
 
   void startPEX() {
     _timer?.cancel();
     _timer = Timer.periodic(Duration(seconds: 60), (timer) {
-      _sendUt_pex_peers();
+      sendUtPexPeers();
     });
   }
 
   Iterable<Peer> get activePeers;
 
-  void _sendUt_pex_peers() {
+  void sendUtPexPeers() {
     var dropped = <CompactAddress>[];
     var added = <CompactAddress>[];
-    activePeers.forEach((p) {
+    for (var p in activePeers) {
       if (!_lastUTPEX.remove(p.address)) {
         added.add(p.address);
       }
-    });
-    _lastUTPEX.forEach((element) {
+    }
+    for (var element in _lastUTPEX) {
       dropped.add(element);
-    });
+    }
     _lastUTPEX.clear();
 
     var data = {};
     data['added'] = [];
-    added.forEach((element) {
+    for (var element in added) {
       _lastUTPEX.add(element);
       data['added'].addAll(element.toBytes());
-    });
+    }
     data['dropped'] = [];
-    dropped.forEach((element) {
+    for (var element in dropped) {
       data['dropped'].addAll(element.toBytes());
-    });
+    }
     if (data['added'].isEmpty && data['dropped'].isEmpty) return;
     var message = encode(data);
-    activePeers.forEach((peer) {
+    for (var peer in activePeers) {
       peer.sendExtendMessage('ut_pex', message);
-    });
+    }
   }
 
   dynamic parsePEXDatas(dynamic source, List<int> message) {
-    var datas = decode(message);
+    var datas = decode(Uint8List.fromList(message));
     _parseAdded(source, datas);
     _parseAdded(source, datas, 'added6', InternetAddressType.IPv6);
   }
@@ -74,7 +75,7 @@ mixin PEX {
       if (added is! List<int>) {
         added = _convert(added);
       }
-      List ips;
+      List? ips;
       try {
         if (type == InternetAddressType.IPv4) {
           ips = CompactAddress.parseIPv4Addresses(added);
@@ -111,7 +112,7 @@ mixin PEX {
             if (f & pex_flag_reachable == pex_flag_reachable) {
               opts['reachable'] = true;
             }
-            Timer.run(() => addPEXPeer(source, ips[i], opts));
+            Timer.run(() => addPEXPeer(source, ips?[i], opts));
           }
         }
       }
@@ -120,7 +121,7 @@ mixin PEX {
 
   void addPEXPeer(dynamic source, CompactAddress address, Map options);
 
-  List<int> _convert(List added) {
+  List<int>? _convert(List added) {
     var intList = <int>[];
     for (var i = 0; i < added.length; i++) {
       var n = added[i];

@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:bencode_dart/bencode_dart.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
 
 mixin ExtendedProcessor {
   final Map<int, String> _extendedEventMap = {};
   int _id = 1;
-  Map _rawMap;
+  Map? _rawMap;
   final Map<int, String> _localExtended = <int, String>{};
 
   Map<String, int> get localExtened {
@@ -35,9 +35,9 @@ mixin ExtendedProcessor {
     _id++;
   }
 
-  int getExtendedEventId(String name) {
+  int? getExtendedEventId(String name) {
     if (_rawMap != null) {
-      return _rawMap[name];
+      return _rawMap![name];
     }
     return null;
   }
@@ -55,20 +55,21 @@ mixin ExtendedProcessor {
   }
 
   void _fireExtendedEvent(String name, dynamic data) {
-    _eventHandler.forEach((element) {
+    for (var element in _eventHandler) {
       Timer.run(() => element(this, name, data));
-    });
+    }
   }
 
   void processExtendHandshake(dynamic data) {
-    var m = data['m'] as Map;
-    _rawMap = m;
-    if (m != null) {
-      m.forEach((key, value) {
-        if (value == 0) return;
-        _extendedEventMap[value] = key;
-      });
+    if (data == null || !(data as Map<String, dynamic>).containsKey('m')) {
+      return;
     }
+    var m = data['m'] as Map<String, dynamic>;
+    _rawMap = m;
+    m.forEach((key, value) {
+      if (value == 0) return;
+      _extendedEventMap[value] = key;
+    });
     _fireExtendedEvent('handshake', data);
   }
 

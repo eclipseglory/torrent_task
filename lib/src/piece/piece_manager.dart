@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:torrent_model/torrent_model.dart';
+import 'package:dtorrent_parser/dtorrent_parser.dart';
 import '../peer/bitfield.dart';
 import 'piece.dart';
 import 'piece_provider.dart';
@@ -34,7 +34,7 @@ class PieceManager implements PieceProvider {
     for (var i = 0; i < metaInfo.pieces.length; i++) {
       var byteLength = metaInfo.pieceLength;
       if (i == metaInfo.pieces.length - 1) {
-        byteLength = metaInfo.lastPriceLength;
+        byteLength = metaInfo.lastPieceLength;
       }
       var piece = Piece(metaInfo.pieces[i], i, byteLength);
       if (!bitfield.getBit(i)) _pieces[i] = piece;
@@ -49,12 +49,12 @@ class PieceManager implements PieceProvider {
     _pieceCompleteHandles.remove(handle);
   }
 
-  /// 这个接口是用于FIleManager回调使用。
+  /// This interface is used for FileManager callback.
   ///
-  /// 只有所有子Piece写入完成才认为该Piece算完成。
+  /// Only when all sub-pieces have been written, the piece is considered complete.
   ///
-  /// 因为如果仅下载完成就修改bitfield，会造成发送have给对方后，对方请求的子piece还没在
-  /// 文件系统中，会读取出错误的数据
+  /// Because if we modify the bitfield only after downloading, it will cause the remote peer
+  /// to request sub-pieces that are not yet present in the file system, leading to errors in data reading.
   void processSubPieceWriteComplete(int pieceIndex, int begin, int length) {
     var piece = _pieces[pieceIndex];
     if (piece != null) {
@@ -63,11 +63,11 @@ class PieceManager implements PieceProvider {
     }
   }
 
-  Piece selectPiece(String remotePeerId, List<int> remoteHavePieces,
-      PieceProvider provider, final Set<int> suggestPieces) {
-    // 查看当前下载piece中是否可以使用该peer
+  Piece? selectPiece(String remotePeerId, List<int> remoteHavePieces,
+      PieceProvider provider, final Set<int>? suggestPieces) {
+    // Check if the current downloading piece can be used by this peer.
     var avalidatePiece = <int>[];
-    // 优先下载Suggest Pieces
+    // Prioritize downloading Suggest Pieces.
     if (suggestPieces != null && suggestPieces.isNotEmpty) {
       for (var i = 0; i < suggestPieces.length; i++) {
         var p = _pieces[suggestPieces.elementAt(i)];
@@ -86,7 +86,9 @@ class PieceManager implements PieceProvider {
       }
     }
 
-    // 如果可以下载正在下载中的piece，就下载该piece（多个Peer同时下载一个piece使其尽快完成的原则）
+    // If it is possible to download a piece that is currently being downloaded,
+    // prioritize downloading that piece (following the principle of multiple
+    // peers downloading the same piece to complete it as soon as possible).
     if (avalidatePiece.isNotEmpty) {
       candidatePieces = avalidatePiece;
     }
@@ -102,18 +104,18 @@ class PieceManager implements PieceProvider {
     _donwloadingPieces.add(pieceIndex);
   }
 
-  /// 完成后的Piece需要一些处理
-  /// - 从`_pieces`列表中删除
-  /// - 从`_downloadingPieces`列表中删除
-  /// - 通知监听器
+  /// After completing a piece, some processing is required:
+  /// - Remove it from the _pieces list.
+  /// - Remove it from the _downloadingPieces list.
+  /// - Notify the listeners.
   void _processCompletePiece(int index) {
     var piece = _pieces.remove(index);
     _donwloadingPieces.remove(index);
     if (piece != null) {
       piece.dispose();
-      _pieceCompleteHandles.forEach((handle) {
+      for (var handle in _pieceCompleteHandles) {
         Timer.run(() => handle(index));
-      });
+      }
     }
   }
 
@@ -133,7 +135,7 @@ class PieceManager implements PieceProvider {
   }
 
   @override
-  Piece operator [](index) {
+  Piece? operator [](index) {
     return _pieces[index];
   }
 

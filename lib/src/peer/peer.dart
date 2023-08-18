@@ -4,13 +4,11 @@ import 'dart:developer' as dev;
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:bencode_dart/bencode_dart.dart';
-import 'package:dartorrent_common/dartorrent_common.dart';
-import 'package:torrent_task/torrent_task.dart';
-import 'package:utp/utp.dart';
+import 'package:b_encode_decode/b_encode_decode.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
+import 'package:dtorrent_task/dtorrent_task.dart';
+import 'package:utp_protocol/utp_protocol.dart';
 
-import '../utils.dart';
-import 'bitfield.dart';
 import 'peer_event_dispatcher.dart';
 import 'congestion_control.dart';
 import 'speed_calculator.dart';
@@ -64,7 +62,6 @@ enum PeerType { TCP, UTP }
 /// 30 Seconds
 const DEFAULT_CONNECT_TIMEOUT = 30;
 
-/// 带有 [index],[begin],[length]参数的方法
 typedef PieceConfigHandle = void Function(
     Peer peer, int index, int begin, int length);
 typedef NoneParamHandle = void Function(Peer peer);
@@ -72,6 +69,8 @@ typedef NoneParamHandle = void Function(Peer peer);
 typedef BoolHandle = void Function(Peer peer, bool value);
 
 typedef SingleIntHandle = void Function(Peer peer, int value);
+
+enum PeerSource { tracker, dht, pex, lsd, incoming, manual, holepunch }
 
 abstract class Peer
     with
@@ -81,51 +80,52 @@ abstract class Peer
         SpeedCalculator {
   /// Countdown time , when peer don't receive or send any message from/to remote ,
   /// this class will invoke close.
-  /// 单位:秒
+  /// Unit: second
   int countdownTime = 150;
 
   String get id {
-    return address?.toContactEncodingString();
+    return address.toContactEncodingString();
   }
 
-  /// 下载项目的piece总数
+  /// The total number of pieces of downloaded items
   final int _piecesNum;
 
-  /// 远程的Bitfield
-  Bitfield _remoteBitfield;
+  /// Remote Bitfield
+  Bitfield? _remoteBitfield;
 
-  /// 该peer是否已经disposed
+  /// Whether the peer has been disposed
   bool _disposed = false;
 
-  /// 倒计时关闭Timer
-  Timer _countdownTimer;
+  /// Countdown to close Timer.
+  Timer? _countdownTimer;
 
-  /// 对方是否choke了我，初始默认true
+  /// Whether the other party choke me, the initial default is true
   bool _chokeMe = true;
 
-  /// 我是否choke了对方，默认true
+  /// Did I choke the other party, the default is true
   bool chokeRemote = true;
 
-  /// 对方是否对我的资源感兴趣，默认false
+  /// Whether the other party is interested in my resources, the default is false
   bool _interestedMe = false;
 
-  /// 我是否对对方的资源感兴趣，默认false
+  /// Am I interested in the resources of the other party, the default is false
   bool interestedRemote = false;
 
-  /// Debug 使用
+  /// Debug use
   // ignore: unused_field
   dynamic _disposeReason;
 
-  /// 远程Peer的地址和端口
+  /// The address and port of the remote peer
   final CompactAddress address;
 
   /// Torrent infohash buffer
   final List<int> _infoHashBuffer;
 
   /// Local Peer Id
-  final String _localPeerId; // 本机的peer id。发送消息会用到
+  final String
+      _localPeerId; // The local peer ID. It is used when sending messages.
 
-  String _remotePeerId;
+  String? _remotePeerId;
 
   /// has this peer send handshake message already?
   bool _handShaked = false;
@@ -133,19 +133,19 @@ abstract class Peer
   /// has this peer send local bitfield to remote?
   bool _bitfieldSended = false;
 
-  /// 远程数据接受，监听subcription
-  StreamSubscription _streamChunk;
+  /// Remote data reception, listening to subscription.
+  StreamSubscription? _streamChunk;
 
-  /// 从通道中获取数据的buffer
+  /// Buffer to obtain data from the channel.
   List<int> _cacheBuffer = [];
 
-  /// 本地发送请求buffer。格式位：[index,begin,length]
+  /// The local sends a request buffer. The format is: [index, begin, length].
   final _requestBuffer = <List<int>>[];
 
-  /// 远程发送请求buffer。格式位：[index,begin,length]
+  /// The remote sends a request buffer. The format is: [index, begin, length].
   final _remoteRequestBuffer = <List<int>>[];
 
-  // /// Max request count in one piple ,5
+  /// Max request count in one piple ,5
   static const MAX_REQUEST_COUNT = 5;
 
   bool remoteEnableFastPeer = false;
@@ -156,28 +156,37 @@ abstract class Peer
 
   bool localEnableExtended = true;
 
-  /// 本地的Allow Fast pieces
+  /// Local Allow Fast pieces.
   final Set<int> _allowFastPieces = <int>{};
 
-  /// 远程发送的Allow Fast pieces
+  /// Remote Allow Fast pieces.
   final Set<int> _remoteAllowFastPieces = <int>{};
 
-  /// 远程发送的Suggest pieces
+  /// Remote Suggest pieces.
   final Set<int> _remoteSuggestPieces = <int>{};
 
   final PeerType type;
 
+  final PeerSource source;
+
   int reqq;
 
-  int remoteReqq;
+  int? remoteReqq;
 
-  ///
-  /// [_id] 是用于区分不同Peer的Id，和[_localPeerId]不同，[_localPeerId]是bt协议中的Peer_id。
-  /// [address]是远程peer的地址和端口，子类在实现的时候可以利用该值进行远程连接。[_infoHashBuffer]
-  /// 是torrent文件中的infohash值，[_piecesNum]是下载项目的总piece数目，用于构建远程`Bitfield`数据
-  /// 使用。可选项[localEnableFastPeer]默认位`true`，表示本地是否开启[Fast Extension(BEP 0006)](http://www.bittorrent.org/beps/bep_0006.html),
-  /// [localEnableExtended]表示本地是否可以使用[Extension Protocol](http://www.bittorrent.org/beps/bep_0010.html)
+  /// [_id] is used to differentiate between different peers. It is different from
+  ///  [_localPeerId], which is the Peer_id in the BitTorrent protocol.
+  /// [address] is the remote peer's address and port, and subclasses can use this
+  ///  value for remote connections.
+  /// [_infoHashBuffer] is the infohash value from the torrent file,
+  /// and [_piecesNum] is the total number of pieces in the download project,
+  /// which is used to construct the remote `Bitfield` data.
+  /// The optional parameter [localEnableFastPeer] is set to `true` by default,
+  /// indicating whether local peers can use the
+  /// [Fast Extension (BEP 0006)](http://www.bittorrent.org/beps/bep_0006.html).
+  /// [localEnableExtended] indicates whether local peers can use the
+  /// [Extension Protocol](http://www.bittorrent.org/beps/bep_0010.html).
   Peer(this._localPeerId, this.address, this._infoHashBuffer, this._piecesNum,
+      this.source,
       {this.type = PeerType.TCP,
       this.localEnableFastPeer = true,
       this.localEnableExtended = true,
@@ -185,43 +194,57 @@ abstract class Peer
     _remoteBitfield = Bitfield.createEmptyBitfield(_piecesNum);
   }
 
-  factory Peer.newTCPPeer(String localPeerId, CompactAddress address,
-      List<int> infoHashBuffer, int piecesNum, Socket socket,
-      {bool enableExtend = true, bool enableFast = true}) {
-    return _TCPPeer(localPeerId, address, infoHashBuffer, piecesNum, socket,
+  factory Peer.newTCPPeer(
+      String localPeerId,
+      CompactAddress address,
+      List<int> infoHashBuffer,
+      int piecesNum,
+      Socket? socket,
+      PeerSource source,
+      {bool enableExtend = true,
+      bool enableFast = true}) {
+    return _TCPPeer(
+        localPeerId, address, infoHashBuffer, piecesNum, socket, source,
         enableExtend: enableExtend, enableFast: enableFast);
   }
 
-  factory Peer.newUTPPeer(String localPeerId, CompactAddress address,
-      List<int> infoHashBuffer, int piecesNum, Socket socket,
-      {bool enableExtend = true, bool enableFast = true}) {
-    return _UTPPeer(localPeerId, address, infoHashBuffer, piecesNum, socket,
+  factory Peer.newUTPPeer(
+      String localPeerId,
+      CompactAddress address,
+      List<int> infoHashBuffer,
+      int piecesNum,
+      UTPSocket? socket,
+      PeerSource source,
+      {bool enableExtend = true,
+      bool enableFast = true}) {
+    return _UTPPeer(
+        localPeerId, address, infoHashBuffer, piecesNum, socket, source,
         enableExtend: enableExtend, enableFast: enableFast);
   }
 
-  /// 远程的Bitfield
-  Bitfield get remoteBitfield => _remoteBitfield;
+  /// The remote peer's bitfield.
+  Bitfield? get remoteBitfield => _remoteBitfield;
 
-  /// 是否已经发送local bitfield给对方
+  /// Whether the local bitfield has been sent to the remote peer.
   bool get bitfieldSended => _bitfieldSended;
 
   bool get isLeecher => !isSeeder;
 
-  /// 如果具备完整的torrent文件，那它就是一个seeder
+  /// If it has the complete torrent file, then it is a seeder.
   bool get isSeeder {
     if (_remoteBitfield == null) return false;
-    if (_remoteBitfield.haveAll()) return true;
+    if (_remoteBitfield!.haveAll()) return true;
     return false;
   }
 
-  String get remotePeerId => _remotePeerId;
+  String? get remotePeerId => _remotePeerId;
 
   String get localPeerId => _localPeerId;
 
-  /// 远程发送的Request请求
+  /// Requests received from the remote peer.
   List<List<int>> get remoteRequestbuffer => _remoteRequestBuffer;
 
-  /// 本地发送给远程的Request请求
+  /// Requests sent from the local peer to the remote peer.
   List<List<int>> get requestBuffer => _requestBuffer;
 
   Set<int> get remoteSuggestPieces => _remoteSuggestPieces;
@@ -237,8 +260,8 @@ abstract class Peer
     }
   }
 
-  bool remoteHave(int index) {
-    return _remoteBitfield.getBit(index);
+  bool? remoteHave(int index) {
+    return _remoteBitfield?.getBit(index);
   }
 
   bool get interestedMe => _interestedMe;
@@ -250,21 +273,21 @@ abstract class Peer
     }
   }
 
-  /// 远程所有的已完成Piece
+  /// All completed pieces of the remote peer.
   List<int> get remoteCompletePieces {
     if (_remoteBitfield == null) return [];
-    return _remoteBitfield.completedPieces;
+    return _remoteBitfield!.completedPieces;
   }
 
   /// Connect remote peer
   Future connect([int timeout = DEFAULT_CONNECT_TIMEOUT]) async {
     try {
       _init();
-      var _stream = await connectRemote(timeout);
+      var stream = await connectRemote(timeout);
       startSpeedCalculator();
-      _streamChunk = _stream.listen(_processReceiveData, onDone: () {
+      _streamChunk = stream?.listen(_processReceiveData, onDone: () {
         _log('Connection is closed $address');
-        dispose(BadException('远程关闭了连接'));
+        dispose(BadException('The remote peer closed the connection'));
       }, onError: (e) {
         _log('Error happen: $address', e);
         dispose(e);
@@ -276,43 +299,48 @@ abstract class Peer
     }
   }
 
-  /// 初始化一些基本数据
+  /// Initialize some basic data.
   void _init() {
-    // 初始化数据
+    /// Initialize data.
     _disposeReason = null;
     _disposed = false;
     _handShaked = false;
-    // 清空通道数据缓存：
+
+    /// Clear the channel data cache.
     _cacheBuffer.clear();
-    // 清空请求缓存
+
+    /// Clear the request cache.
     _requestBuffer.clear();
     _remoteRequestBuffer.clear();
-    // 重置fast pieces
+
+    /// Reset the fast pieces.
     _remoteAllowFastPieces.clear();
     _allowFastPieces.clear();
-    // 重置suggest pieces
+
+    /// Reset the suggest pieces.
     _remoteSuggestPieces.clear();
-    // 重置远程fast extension标识
+
+    /// Reset the remote fast extension flag.
     remoteEnableFastPeer = false;
   }
 
-  List<int> removeRequest(int index, int begin, int length) {
+  List<int>? removeRequest(int index, int begin, int length) {
     var request = _removeRequestFromBuffer(index, begin, length);
     return request;
   }
 
-  /// 添加一个request到buffer中
-  ///
-  /// 这个request是一个数组 :
-  /// - 0 : index
-  /// - 1 : begin
-  /// - 2 : length
-  /// - 3 : send time
-  /// - 4 : resend times
+  /// Add a request to the buffer.
+
+  /// This request is an array:
+  /// - 0: index
+  /// - 1: begin
+  /// - 2: length
+  /// - 3: send time
+  /// - 4: resend times
   bool addRequest(int index, int begin, int length) {
     var maxCount = currentWindow;
     // maxCount = oldCount;
-    if (remoteReqq != null) maxCount = min(remoteReqq, maxCount);
+    if (remoteReqq != null) maxCount = min(remoteReqq!, maxCount);
     if (_requestBuffer.length >= maxCount) return false;
     _requestBuffer
         .add([index, begin, length, DateTime.now().microsecondsSinceEpoch, 0]);
@@ -328,12 +356,15 @@ abstract class Peer
   }
 
   void _processReceiveData(dynamic data) {
-    // 不管收到什么消息，只要不是空的，重置倒计时:
+    // Regardless of what message is received, as long as it is not empty, reset the countdown timer.
     if (data != null && data.isNotEmpty) _startToCountdown();
-    // if (data.isNotEmpty) log('收到数据 $data');
-    if (data != null) _cacheBuffer.addAll(data); // 接受remote发送数据。缓冲到一处
+    // if (data.isNotEmpty) log('Received data: $data');
+    if (data != null) {
+      _cacheBuffer.addAll(
+          data); // Accept data sent by the remote peer and buffer it in one place.
+    }
     if (_cacheBuffer.isEmpty) return;
-    // 查看是不是handshake头
+    // Check if it's a handshake header.
     if (_cacheBuffer[0] == 19 && _cacheBuffer.length >= 68) {
       if (_isHandShakeHead(_cacheBuffer)) {
         if (_validateInfoHash(_cacheBuffer)) {
@@ -357,8 +388,8 @@ abstract class Peer
       var lengthBuffer = Uint8List(4);
       List.copyRange(lengthBuffer, 0, _cacheBuffer, start, 4);
       var length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
-      List<Uint8List> piecesMessage;
-      List<Uint8List> haveMessages;
+      List<Uint8List>? piecesMessage;
+      List<Uint8List>? haveMessages;
       while (_cacheBuffer.length - start - 4 >= length) {
         if (length == 0) {
           Timer.run(() => _processMessage(null, null));
@@ -386,10 +417,10 @@ abstract class Peer
         length = ByteData.view(lengthBuffer.buffer).getInt32(0, Endian.big);
       }
       if (piecesMessage != null && piecesMessage.isNotEmpty) {
-        Timer.run(() => _processReceivePieces(piecesMessage));
+        Timer.run(() => _processReceivePieces(piecesMessage!));
       }
       if (haveMessages != null && haveMessages.isNotEmpty) {
-        Timer.run(() => _processHave(haveMessages));
+        Timer.run(() => _processHave(haveMessages!));
       }
       if (start != 0) _cacheBuffer = _cacheBuffer.sublist(start);
     }
@@ -410,7 +441,7 @@ abstract class Peer
     return true;
   }
 
-  void _processMessage(int id, Uint8List message) {
+  void _processMessage(int? id, Uint8List? message) {
     if (id == null) {
       _log('process keep alive $address');
       fireKeepAlive();
@@ -440,11 +471,11 @@ abstract class Peer
         //   return; // have message
         case ID_BITFIELD:
           // log('process bitfield from $address');
-          initRemoteBitfield(message);
+          if (message != null) initRemoteBitfield(message);
           return; // bitfield message
         case ID_REQUEST:
-          _log('process request from ${address}');
-          _processRemoteRequest(message);
+          _log('process request from $address');
+          if (message != null) _processRemoteRequest(message);
           return; // request message
         // case ID_PIECE:
         //   _log('process pices : $address');
@@ -452,12 +483,14 @@ abstract class Peer
         //   return; // pices message
         case ID_CANCEL:
           _log('process cancel : $address');
-          _processCancel(message);
+          if (message != null) _processCancel(message);
           return; // cancel message
         case ID_PORT:
           _log('process port : $address');
-          var port = ByteData.view(message.buffer).getUint16(0);
-          _processPortChange(port);
+          if (message != null) {
+            var port = ByteData.view(message.buffer).getUint16(0);
+            _processPortChange(port);
+          }
           return; // port message
         case OP_HAVE_ALL:
           _log('process have all : $address');
@@ -469,30 +502,32 @@ abstract class Peer
           return;
         case OP_SUGGEST_PIECE:
           _log('process suggest pieces : $address');
-          _processSuggestPiece(message);
+          if (message != null) _processSuggestPiece(message);
           return;
         case OP_REJECT_REQUEST:
           _log('process reject request : $address');
-          _processRejectRequest(message);
+          if (message != null) _processRejectRequest(message);
           return;
         case OP_ALLOW_FAST:
           _log('process allow fast : $address');
-          _processAllowFast(message);
+          if (message != null) _processAllowFast(message);
           return;
         case ID_EXTENDED:
-          var extid = message[0];
-          message = message.sublist(1);
-          processExtendMessage(extid, message);
+          if (message != null) {
+            var extid = message[0];
+            message = message.sublist(1);
+            processExtendMessage(extid, message);
+          }
           return;
       }
     }
-    _log('Cannot process the message', 'Unknown message : ${message}');
+    _log('Cannot process the message', 'Unknown message : $message');
   }
 
-  /// 从requestbuffer中将request删除
+  /// Remove a request from the request buffer.
   ///
-  /// 每当得到了piece回应或者request超时，都会调用此方法
-  List<int> _removeRequestFromBuffer(int index, int begin, int length) {
+  /// This method is called whenever a piece response is received or a request times out.
+  List<int>? _removeRequestFromBuffer(int index, int begin, int length) {
     var i = _findRequestIndexFromBuffer(index, begin, length);
     if (i != -1) {
       return _requestBuffer.removeAt(i);
@@ -533,7 +568,7 @@ abstract class Peer
     var index = view.getUint32(0);
     var begin = view.getUint32(4);
     var length = view.getUint32(8);
-    var requestIndex;
+    int? requestIndex;
     for (var i = 0; i < _remoteRequestBuffer.length; i++) {
       var r = _remoteRequestBuffer[i];
       if (r[0] == index && r[1] == begin) {
@@ -557,13 +592,14 @@ abstract class Peer
       dispose('Remote disabled fast extension but receive \'have all\'');
       return;
     }
-    for (var i = 0; i < _remoteBitfield.buffer.length - 1; i++) {
-      _remoteBitfield.buffer[i] = 255;
+    if (_remoteBitfield == null) return;
+    for (var i = 0; i < _remoteBitfield!.buffer.length - 1; i++) {
+      _remoteBitfield?.buffer[i] = 255;
     }
-    var index = _remoteBitfield.buffer.length - 1;
+    var index = _remoteBitfield!.buffer.length - 1;
     index = index * 8;
-    for (var i = index; i < _remoteBitfield.piecesNum; i++) {
-      _remoteBitfield.setBit(i, true);
+    for (var i = index; i < _remoteBitfield!.piecesNum; i++) {
+      _remoteBitfield?.setBit(i, true);
     }
     fireRemoteHaveAll();
   }
@@ -604,7 +640,7 @@ abstract class Peer
       startRequestDataTimeout();
       fireRejectRequest(index, begin, length);
     } else {
-      // 有可能被删除了，但是reject来慢了而已
+      // It's possible that the peer was deleted, but the reject message arrived too late.
       // dispose('Never send request ($index,$begin) but recieve a rejection');
       return;
     }
@@ -632,9 +668,9 @@ abstract class Peer
   void _processRemoteRequest(Uint8List message) {
     if (_remoteRequestBuffer.length > reqq) {
       dev.log('Request Error:',
-          error: 'Too many requests from ${address}',
+          error: 'Too many requests from $address',
           name: runtimeType.toString());
-      dispose(BadException('Too many requests from ${address}'));
+      dispose(BadException('Too many requests from $address'));
       return;
     }
     var view = ByteData.view(message.buffer);
@@ -645,7 +681,7 @@ abstract class Peer
       dev.log('TOO LARGEt BLOCK',
           error: 'BLOCK $length', name: runtimeType.toString());
       dispose(BadException(
-          '${address} : request block length larger than limit : $length > $MAX_REQUEST_LENGTH'));
+          '$address : request block length larger than limit : $length > $MAX_REQUEST_LENGTH'));
       return;
     }
     if (chokeRemote) {
@@ -654,23 +690,23 @@ abstract class Peer
         fireRequest(index, begin, length);
         return;
       } else {
-        // choke对方我不需要应答
+        // Choking the remote peer without sending an acknowledgment.
         // sendRejectRequest(index, begin, length);
         return;
       }
     }
 
     _remoteRequestBuffer.add([index, begin, length]);
-    // TODO 这里做速度限制！
+    // TODO Implement speed limit here!
     fireRequest(index, begin, length);
   }
 
-  /// 处理接收到的PIECE消息
+  /// Handle the received PIECE messages.
   ///
-  /// 不同于其他消息处理，PIECE消息是进行批量处理的。
+  /// Unlike other message types, PIECE messages are processed in batches.
   void _processReceivePieces(List<Uint8List> messages) {
     var requests = <List<int>>[];
-    messages.forEach((message) {
+    for (var message in messages) {
       var dataHead = Uint8List(8);
       List.copyRange(dataHead, 0, message, 0, 8);
       var view = ByteData.view(dataHead.buffer);
@@ -678,16 +714,18 @@ abstract class Peer
       var begin = view.getUint32(4);
       var blockLength = message.length - 8;
       var request = removeRequest(index, begin, blockLength);
-      // 没有请求的就不处理
+
+      /// Ignore if there are no requests to process.
       if (request == null) {
-        return;
+        continue;
       }
       var block = Uint8List(message.length - 8);
       List.copyRange(block, 0, message, 8);
       requests.add(request);
-      _log('收到请求Piece ($index,$begin) 内容, 从当前Peer已下载 $downloaded bytes ');
+      _log(
+          'Received request for Piece ($index, $begin) content, downloaded $downloaded bytes from the current Peer $type $address');
       firePiece(index, begin, block);
-    });
+    }
     messages.clear();
     ackRequest(requests);
     updateDownload(requests);
@@ -696,17 +734,17 @@ abstract class Peer
 
   void _processHave(List<Uint8List> messages) {
     var indices = <int>[];
-    messages.forEach((message) {
+    for (var message in messages) {
       var index = ByteData.view(message.buffer).getUint32(0);
       indices.add(index);
       updateRemoteBitfield(index, true);
-    });
+    }
     fireHave(indices);
   }
 
-  /// 更新远程Bitfield
+  /// Update the remote peer's bitfield.
   void updateRemoteBitfield(int index, bool have) {
-    _remoteBitfield.setBit(index, have);
+    _remoteBitfield?.setBit(index, have);
   }
 
   void initRemoteBitfield(Uint8List bitfield) {
@@ -733,7 +771,7 @@ abstract class Peer
     }
   }
 
-  String _parseRemotePeerId(dynamic data) {
+  String? _parseRemotePeerId(dynamic data) {
     if (data is List<int>) {
       return String.fromCharCodes(data.sublist(48, 68));
     }
@@ -745,12 +783,12 @@ abstract class Peer
   /// [timeout] defaul value is 30 seconds
   /// Different type peer use different protocol , such as TCP,uTP,
   /// so this method should be implemented by sub-class
-  Future<Stream> connectRemote(int timeout);
+  Future<Stream?> connectRemote(int timeout);
 
   /// Send message to remote
   ///
   /// this method will transform the [message] and id to be the peer protocol message bytes
-  void sendMessage(int id, [List<int> message]) {
+  void sendMessage(int? id, [List<int>? message]) {
     if (isDisposed) return;
     if (id == null) {
       // it's keep alive
@@ -763,7 +801,7 @@ abstract class Peer
     _startToCountdown();
   }
 
-  List<int> _createByteMessage(int id, List<int> message) {
+  List<int> _createByteMessage(int id, List<int>? message) {
     var length = 0;
     if (message != null) length = message.length;
     length = length + 1;
@@ -784,9 +822,9 @@ abstract class Peer
   /// See : [Peer protocol message](https://wiki.theory.org/BitTorrentSpecification#Messages)
   void sendByteMessage(List<int> bytes);
 
-  /// 发送handshake消息。
+  /// Send a handshake message.
   ///
-  /// 在发送handshake后，会主动发送bitfield和have消息给对方
+  /// After sending the handshake message, this method will also proactively send the bitfield and have messages to the remote peer.
   void sendHandShake() {
     if (_handShaked) return;
     var message = <int>[];
@@ -845,7 +883,7 @@ abstract class Peer
         return false;
       }
     }
-    int requestIndex;
+    int? requestIndex;
     for (var i = 0; i < _remoteRequestBuffer.length; i++) {
       var r = _remoteRequestBuffer[i];
       if (r[0] == index && r[1] == begin) {
@@ -912,9 +950,9 @@ abstract class Peer
   @override
   List<List<int>> get currentRequestBuffer => _requestBuffer;
 
-  /// 请求取消某个request
+  /// Cancel a specific request by removing it from the request queue.
   ///
-  /// 如果在请求队列中就删除，否则返回
+  /// If the request is present in the queue, it will be removed; otherwise, this operation will simply return.
   void requestCancel(int index, int begin, int length) {
     var request = removeRequest(index, begin, length);
     if (request != null) {
@@ -946,7 +984,7 @@ abstract class Peer
   /// valid and available piece. Spare bits at the end are set to zero.
   ///
   void sendBitfield(Bitfield bitfield) {
-    _log('发送bitfile信息给对方 : ${bitfield.buffer}');
+    _log('Sending bitfile information to the peer: ${bitfield.buffer}');
     if (_bitfieldSended) return;
     _bitfieldSended = true;
     if (remoteEnableFastPeer && localEnableFastPeer) {
@@ -968,7 +1006,7 @@ abstract class Peer
   /// index of a piece that has just been successfully downloaded and verified via the hash.
   void sendHave(int index) {
     var bytes = Uint8List(4);
-    _log('发送have信息给对方 : ${bytes},$index');
+    _log('Sending have information to the peer: $bytes, $index');
     ByteData.view(bytes.buffer).setUint32(0, index, Endian.big);
     sendMessage(ID_HAVE, bytes);
   }
@@ -987,7 +1025,7 @@ abstract class Peer
     sendMessage(id);
   }
 
-  /// 发送`interested` 或 `not interested` 到 对方，表明自己是否对它拥有资源感兴趣
+  ///Send interested or not interested to the other party to indicate whether you are interested in its resources or not.
   ///
   /// - `interested: <len=0001><id=2>`
   /// - `not interested: <len=0001><id=3>`
@@ -1105,7 +1143,7 @@ abstract class Peer
     }
   }
 
-  /// 开始倒计时。
+  /// Countdown started.
   ///
   /// Over `countdownTime` seconds , peer will close to disconnect the remote.
   /// but if peer send or receive any message from/to remote during countdown,
@@ -1113,14 +1151,13 @@ abstract class Peer
   void _startToCountdown() {
     _countdownTimer?.cancel();
     _countdownTimer = Timer(Duration(seconds: countdownTime), () {
-      dispose('Over ${countdownTime} seconds no communication, close');
+      dispose('Over $countdownTime seconds no communication, close');
     });
   }
 
-  /// 该Peer被dispose。
+  /// The Peer has been disposed.
   ///
-  /// 被dispose后的peer将无法再发送或监听数据，状态数据也恢复到初始状态，并且之前添加的事件监听
-  /// 器都会被移除。
+  /// After disposal, the Peer will no longer be able to send or receive data, its state data will be reset to its initial state, and all previously added event listeners will be removed.
   Future dispose([dynamic reason]) async {
     if (_disposed) return;
     _disposeReason = reason;
@@ -1141,10 +1178,15 @@ abstract class Peer
 
   void _log(String message, [dynamic error]) {
     if (error != null) {
-      // dev.log(message, error: error, name: runtimeType.toString());
+      dev.log(message, error: error, name: runtimeType.toString());
     } else {
-      // log(message, name: runtimeType.toString());
+      dev.log(message, name: runtimeType.toString());
     }
+  }
+
+  @override
+  String toString() {
+    return '$type:${_remotePeerId?.codeUnits != null ? Uint8List.fromList(_remotePeerId!.codeUnits).toHexString() : ''} $address $source';
   }
 
   @override
@@ -1164,7 +1206,7 @@ class BadException implements Exception {
   BadException(this.e);
   @override
   String toString() {
-    return '不需重连错误 : $e';
+    return 'No need to reconnect error: $e';
   }
 }
 
@@ -1174,23 +1216,23 @@ class TCPConnectException implements Exception {
 }
 
 class _TCPPeer extends Peer {
-  Socket _socket;
+  Socket? _socket;
   _TCPPeer(String localPeerId, CompactAddress address, List<int> infoHashBuffer,
-      int piecesNum, this._socket,
+      int piecesNum, this._socket, PeerSource source,
       {bool enableExtend = true, bool enableFast = true})
-      : super(localPeerId, address, infoHashBuffer, piecesNum,
+      : super(localPeerId, address, infoHashBuffer, piecesNum, source,
             type: PeerType.TCP,
             localEnableExtended: enableExtend,
             localEnableFastPeer: enableFast);
 
   @override
-  Future<Stream> connectRemote(int timeout) async {
+  Future<Stream?> connectRemote(int? timeout) async {
     timeout ??= 30;
     try {
       _socket ??= await Socket.connect(address.address, address.port,
           timeout: Duration(seconds: timeout));
       return _socket;
-    } catch (e) {
+    } on Exception catch (e) {
       throw TCPConnectException(e);
     }
   }
@@ -1223,21 +1265,27 @@ class _TCPPeer extends Peer {
 /// actually , one UTPSocketClient should maintain several uTP socket(uTP peer),
 /// this class need to improve.
 class _UTPPeer extends Peer {
-  UTPSocketClient _client;
-  UTPSocket _socket;
-  _UTPPeer(String localPeerId, CompactAddress address, List<int> infoHashBuffer,
-      int piecesNum, this._socket,
-      {bool enableExtend = true, bool enableFast = true})
-      : super(localPeerId, address, infoHashBuffer, piecesNum,
+  UTPSocketClient? _client;
+  UTPSocket? _socket;
+  _UTPPeer(
+    String localPeerId,
+    CompactAddress address,
+    List<int> infoHashBuffer,
+    int piecesNum,
+    this._socket,
+    PeerSource source, {
+    bool enableExtend = true,
+    bool enableFast = true,
+  }) : super(localPeerId, address, infoHashBuffer, piecesNum, source,
             type: PeerType.UTP,
             localEnableExtended: enableExtend,
             localEnableFastPeer: enableFast);
 
   @override
-  Future<Stream> connectRemote(int timeout) async {
+  Future<Stream?> connectRemote(int timeout) async {
     if (_socket != null) return _socket;
     _client ??= UTPSocketClient();
-    _socket = await _client.connect(address.address, address.port);
+    _socket = await _client?.connect(address.address, address.port);
     return _socket;
   }
 

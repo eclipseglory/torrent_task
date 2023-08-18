@@ -1,26 +1,25 @@
-import 'package:dartorrent_common/dartorrent_common.dart';
+import 'package:dtorrent_common/dtorrent_common.dart';
 
-import '../utils.dart';
 import 'piece.dart';
 import 'piece_provider.dart';
 import 'piece_selector.dart';
 
 ///
-/// `Piece`基础选择器。
+/// Basic piece selector.
 ///
-/// 基本策略为：
+/// The basic strategy is:
 ///
-/// - `Piece`可用`Peer`数量最多
-/// - 在可用`Peer`数量都相同的情况下，选用`Sub Piece`数量最少的
+/// - Choose the Piece with the highest number of available Peers.
+/// - If multiple Pieces have the same number of available Peers, choose the one with the fewest Sub Pieces remaining.
 class BasePieceSelector implements PieceSelector {
   @override
-  Piece selectPiece(
+  Piece? selectPiece(
       String remotePeerId, List<int> piecesIndexList, PieceProvider provider,
       [bool random = false]) {
     // random = true;
     var maxList = <Piece>[];
-    var a;
-    var startIndex;
+    Piece? a;
+    int? startIndex;
     for (var i = 0; i < piecesIndexList.length; i++) {
       var p = provider[piecesIndexList[i]];
       if (p != null &&
@@ -32,7 +31,7 @@ class BasePieceSelector implements PieceSelector {
       }
     }
     if (startIndex == null) return null;
-    maxList.add(a);
+    maxList.add(a!);
     for (var i = startIndex; i < piecesIndexList.length; i++) {
       var p = provider[piecesIndexList[i]];
       if (p == null ||
@@ -40,15 +39,15 @@ class BasePieceSelector implements PieceSelector {
           !p.containsAvalidatePeer(remotePeerId)) {
         continue;
       }
-      // 选择稀有piece
-      if (a.avalidatePeersCount > p.avalidatePeersCount) {
+      // Select rare pieces
+      if (a!.avalidatePeersCount > p.avalidatePeersCount) {
         if (!random) return p;
         maxList.clear();
         a = p;
         maxList.add(a);
       } else {
         if (a.avalidatePeersCount == p.avalidatePeersCount) {
-          // 如果同样数量可用下载peer的piece所具有的sub piece少，优先处理
+          // If multiple Pieces have the same number of available downloading Peers, prioritize the one with the fewest remaining Sub Pieces.
           if (p.avalidateSubPieceCount < a.avalidateSubPieceCount) {
             if (!random) return p;
             maxList.clear();
